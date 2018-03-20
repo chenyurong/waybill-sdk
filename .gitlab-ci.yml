@@ -11,4 +11,4 @@ build:
     - java-server
   allow_failure: false
   script:
-    - ./gradlew build
+    - ./gradlew build -x test
