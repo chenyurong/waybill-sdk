@@ -1,0 +1,14 @@
+stages:
+  - build
+
+cache:
+  paths:
+    - .gradle/
+
+build:
+  stage: build
+  tags:
+    - java-server
+  allow_failure: false
+  script:
+    - ./gradlew build
