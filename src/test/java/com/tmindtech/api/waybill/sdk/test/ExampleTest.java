@@ -6,7 +6,7 @@ import org.junit.Test;
 public class ExampleTest {
     @Test
     public void getCatlog() throws Exception {
-        new WaybillSDK("123456", "123456")
+        new WaybillSDK("123456", "123456", "HP LaserJet Professional M1213nf MFP")
                 .getWaybillService()
                 .getCatlog(1, true)
                 .execute();

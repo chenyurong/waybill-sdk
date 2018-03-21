@@ -2,6 +2,7 @@ package com.tmindtech.api.waybill.sdk;
 
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
+import java.util.List;
 import retrofit2.Call;
 import retrofit2.http.GET;
 import retrofit2.http.Query;
@@ -32,4 +33,13 @@ public interface WaybillService {
     default Call<ExampleModel> getCatlog(long id, boolean flag) {
         return getCatlog(id, flag, "json");
     }
+
+    /**
+     * 根据批次号获取生成面单的存储地址列表
+     *
+     * @param batch 批次号
+     * @return 面单存储地址列表
+     */
+    @GET("api/v1/batch_number")
+    Call<List<String>> getOrderNamesByBatchNumber(@Query("batch") String batch);
 }
