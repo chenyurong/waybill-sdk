@@ -11,7 +11,8 @@ import org.junit.runners.Suite;
  */
 @RunWith(Suite.class)
 @Suite.SuiteClasses({
-        StatusTest.class
+        StatusTest.class,
+        ExampleTest.class
 })
 public class RuleSuite {
     @ClassRule
