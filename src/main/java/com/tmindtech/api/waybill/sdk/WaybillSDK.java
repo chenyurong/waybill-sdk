@@ -1,10 +1,12 @@
 package com.tmindtech.api.waybill.sdk;
 
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
+import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import javax.print.Doc;
 import javax.print.DocFlavor;
 import javax.print.DocPrintJob;
@@ -22,6 +24,8 @@ import javax.print.attribute.standard.MediaPrintableArea;
 import javax.print.attribute.standard.OrientationRequested;
 import javax.print.attribute.standard.PrintQuality;
 import javax.print.attribute.standard.PrinterName;
+import javax.print.event.PrintJobAdapter;
+import javax.print.event.PrintJobEvent;
 import okhttp3.OkHttpClient;
 import okhttp3.logging.HttpLoggingInterceptor;
 import retrofit2.Retrofit;
@@ -36,6 +40,7 @@ import retrofit2.converter.gson.GsonConverterFactory;
 public class WaybillSDK {
     private final String accessKey;
     private final String accessSecret;
+    private String[] baseUrls;
     private PrintService printService;
     private PictureService pictureService = getPictureService();
 
@@ -45,9 +50,10 @@ public class WaybillSDK {
      * @param accessKey    accessKey
      * @param accessSecret accessSecret
      */
-    public WaybillSDK(String accessKey, String accessSecret, String printerName) {
+    public WaybillSDK(String accessKey, String accessSecret, String printerName, String[] baseUrls) {
         this.accessKey = accessKey;
         this.accessSecret = accessSecret;
+        this.baseUrls = baseUrls;
 
         DocFlavor dof = DocFlavor.INPUT_STREAM.JPEG;
         HashAttributeSet hs = new HashAttributeSet();
@@ -60,7 +66,7 @@ public class WaybillSDK {
         System.out.println("printer initialize success！");
         System.out.println("here is all printers：");
         Arrays.asList(printServices).forEach(item -> System.out.println("printerName: " + item.getName()));
-        printService = printServices[0];
+        this.printService = printServices[0];
     }
 
     /**
@@ -88,10 +94,22 @@ public class WaybillSDK {
      * @param printerWidth   宽度(毫米)
      * @param printerHeight  高度(毫米)
      */
-    public void printOrderByBatchNumber(String batch, int count, int printerXoffset,
-                                        int printerYoffset, int printerWidth, int printerHeight) {
-        WaybillService billService = getWaybillService();
+    public PrintResult printOrderByBatchNumber(String batch, int count, int printerXoffset,
+                                               int printerYoffset, int printerWidth, int printerHeight) {
+        PrintResult printResult = new PrintResult();
         try {
+            WaybillService billService = null;
+            for (String baseUrl : baseUrls) {
+                billService = getWaybillService(baseUrl);
+                if (billService != null) {
+                    if (billService.getOrderNamesByBatchNumber(batch).execute().isSuccessful()) {
+                        break;
+                    }
+                }
+            }
+            if (billService == null) {
+                billService = getWaybillService(Constants.CLOUD_BASE_URL);
+            }
             List<String> paths = billService.getOrderNamesByBatchNumber(batch).execute().body();
             if (paths != null && paths.size() != 0) {
                 paths.forEach(path -> {
@@ -106,29 +124,71 @@ public class WaybillSDK {
                     try {
                         Doc doc = new SimpleDoc(pictureService.getOrderPictureByPath(path).execute().body().byteStream(), dof, das);
                         DocPrintJob job = printService.createPrintJob();
+                        job.addPrintJobListener(new PrintJobAdapter() {
+                            @Override
+                            public void printDataTransferCompleted(PrintJobEvent pje) {
+                                printResult.code = 0;
+                                printResult.result = "数据传输成功";
+                            }
+
+                            @Override
+                            public void printJobCompleted(PrintJobEvent pje) {
+                                printResult.code = 1;
+                                printResult.result = "打印服务成功";
+                            }
+
+                            @Override
+                            public void printJobFailed(PrintJobEvent pje) {
+                                printResult.code = 2;
+                                printResult.result = "打印服务失败";
+                            }
+
+                            @Override
+                            public void printJobCanceled(PrintJobEvent pje) {
+                                printResult.code = 3;
+                                printResult.result = "打印服务已取消";
+                            }
+
+                            @Override
+                            public void printJobNoMoreEvents(PrintJobEvent pje) {
+                                printResult.code = 4;
+                                printResult.result = "打印服务全部完成，等待其他打印服务";
+                            }
+
+                            @Override
+                            public void printJobRequiresAttention(PrintJobEvent pje) {
+                                printResult.code = 5;
+                                printResult.result = "可以恢复的打印服务，如打印机缺纸";
+                            }
+                        });
                         job.print(doc, pras);
                     } catch (PrintException ex) {
-                        System.out.println("printer failure!");
-                        ex.printStackTrace();
+                        printResult.code = 6;
+                        printResult.result = "打印故障，请检查是否有可用打印设备";
                     } catch (IOException ex) {
-                        ex.printStackTrace();
+                        printResult.code = 7;
+                        printResult.result = "打印故障，网络不可用，稍后重试";
                     }
                 });
             }
         } catch (IOException ex) {
-            ex.printStackTrace();
+            printResult.code = 8;
+            printResult.result = "打印故障，未可预知的错误";
         }
+        return printResult;
     }
 
-    public WaybillService getWaybillService() {
+    public WaybillService getWaybillService(String baseUrl) {
         //每个 OkHttpClient 都会有一个线程池, 如果拦截器不会变化的话, 可以缓存下来, 每次都重新生成一个 OkHttpClient 可能有性能问题
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(5, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))    //实际工作时不要用 BODY, 输出太多了
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(Constants.BASE_URL)
+                .baseUrl(baseUrl)
                 .addConverterFactory(GsonConverterFactory.create())
                 .client(okHttpClient)
                 .build()
