@@ -7,6 +7,5 @@ import java.time.format.DateTimeFormatter;
  */
 public class Constants {
     public static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    public static final String CLOUD_BASE_URL = "http://localhost:8080/tmind/v1/";
-    public static final String GET_PICTURE_URL = "http://localhost:8080/tmind/v1/pictures/";
+    public static final String PICTURE_SERVER_URL = "http://localhost:8888/";
 }

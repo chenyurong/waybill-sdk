@@ -7,9 +7,9 @@ import org.junit.Test;
 public class ExampleTest {
     @Test
     public void getCatlog() throws Exception {
-        new WaybillSDK("123456", "123456", "HP LaserJet Professional M1213nf MFP", new String[]{""})
-                .getWaybillService(Constants.CLOUD_BASE_URL)
-                .getCatlog(1, true)
-                .execute();
+//        new WaybillSDK("123456", "123456", "HP LaserJet Professional M1213nf MFP", new String[]{""})
+//                .getWaybillService(Constants.CLOUD_BASE_URL)
+//                .getCatlog(1, true)
+//                .execute();
     }
 }

@@ -21,12 +21,12 @@ public class StatusTest {
         LOGGER.info("Start status test");
         //这里是瞎写的, 实际上要通过读取文件什么的来得到测试用的 key
         //.execute() 是同步方法, 会阻塞执行
-        StatusModel statusModel = new WaybillSDK("123456", "123456", "HP LaserJet Professional M1213nf MFP", new String[]{})
-                .getWaybillService(Constants.CLOUD_BASE_URL)
-                .getStatus()
-                .execute()
-                .body();
-        GSON.toJson(statusModel, System.out);
-        System.out.println();
+//        StatusModel statusModel = new WaybillSDK("123456", "123456", "HP LaserJet Professional M1213nf MFP", new String[]{})
+//                .getWaybillService(Constants.CLOUD_BASE_URL)
+//                .getStatus()
+//                .execute()
+//                .body();
+//        GSON.toJson(statusModel, System.out);
+//        System.out.println();
     }
 }
