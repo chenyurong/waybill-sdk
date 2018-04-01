@@ -1,11 +1,12 @@
 package com.tmindtech.api.waybill.sdk;
 
-import com.sun.org.apache.xpath.internal.operations.Bool;
 import com.tmindtech.api.waybill.sdk.exception.AwesomeException;
 import com.tmindtech.api.waybill.sdk.interceptor.HotSwitchInterceptor;
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
-import com.tmindtech.api.waybill.sdk.model.LogicUriInfo;
+import com.tmindtech.api.waybill.sdk.model.LabelInfo;
+import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.PrintResult;
+import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -16,6 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,13 +30,10 @@ import javax.print.PrintException;
 import javax.print.PrintService;
 import javax.print.PrintServiceLookup;
 import javax.print.SimpleDoc;
-import javax.print.attribute.DocAttributeSet;
 import javax.print.attribute.HashAttributeSet;
-import javax.print.attribute.HashDocAttributeSet;
 import javax.print.attribute.HashPrintRequestAttributeSet;
-import javax.print.attribute.PrintRequestAttributeSet;
 import javax.print.attribute.standard.Copies;
-import javax.print.attribute.standard.MediaPrintableArea;
+import javax.print.attribute.standard.MediaSizeName;
 import javax.print.attribute.standard.OrientationRequested;
 import javax.print.attribute.standard.PrintQuality;
 import javax.print.attribute.standard.PrinterName;
@@ -52,7 +51,6 @@ import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
 /**
- * 实际上的这个 SDK 功能相当复杂, 这个 demo 的结构可能是完全不对的
  * 这个 SDK 要判断当前仓库中, 各个本地服务是否可用, 如果一个本地服务不可用要自动切换使用另一个本地服务
  * 如果所有本地服务全部不可用则直接访问云端服务器(接口是一样的, 在内部实现切换)
  * 所有的一切都要在 SDK 内自动完成, 不需要外部干预
@@ -103,6 +101,7 @@ public class WaybillSDK {
             }
         }
         this.localServerAddressList = localServerAddresses;
+        this.printService = PrintServiceLookup.lookupDefaultPrintService();
         return true;
     }
 
@@ -122,13 +121,13 @@ public class WaybillSDK {
     }
 
     /**
-     * 设置当前打印机
+     * 设置当前打印机,如果没有设置，则printService为默认打印机
      *
      * @param name 要设置的指定打印机
      * @return true设置成功，false设置失败
      */
     public boolean setCurrentPrinter(String name) {
-        DocFlavor dof = DocFlavor.INPUT_STREAM.JPEG;
+        DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
         HashAttributeSet hs = new HashAttributeSet();
         hs.add(new PrinterName(name, null));
         PrintService[] printServices = PrintServiceLookup.lookupPrintServices(dof, hs);
@@ -137,6 +136,24 @@ public class WaybillSDK {
         }
         this.printService = printServices[0];
         return true;
+    }
+
+    /**
+     * 通过打印机名称获取指定名称
+     *
+     * @param name 指定打印机名称
+     * @return 目标打印机名称
+     */
+    public PrintService getPrinterByName(String name) {
+        DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
+        HashAttributeSet hs = new HashAttributeSet();
+        hs.add(new PrinterName(name, null));
+        PrintService[] printServices = PrintServiceLookup.lookupPrintServices(dof, hs);
+        if (printServices.length == 0) {
+            throw new AwesomeException(Config.PrinterNotExist);
+        } else {
+            return printServices[0];
+        }
     }
 
     /**
@@ -149,143 +166,173 @@ public class WaybillSDK {
     }
 
     /**
-     * 通过批次号获取面单逻辑地址列表（兼容一件多单）
+     * 获取面单信息，然后通过逻辑连接/唯一码获取到面单图片
      *
      * @param saleOrder 出库批次号
-     * @return 面单逻辑地址列表
+     * @return 面单信息列表，兼容多包裹
      */
-    public List<LogicUriInfo> getWaybillAddress(String saleOrder) {
-        List<LogicUriInfo> uriInfos = new ArrayList<>();
+    public List<LabelInfo> getLabelInfo(String saleOrder) {
+        List<LabelInfo> labelInfos = new ArrayList<>();
         List<String> uris;
         try {
-            uris = getWaybillService().getOrderNamesByBatchNumber(saleOrder).execute().body();
+            uris = getWaybillService().getLabelInfo(saleOrder).execute().body();
         } catch (IOException ex) {
-            throw new AwesomeException(Config.SALE_ORDER_ERROR_OR_NOT_EXIST);
+            throw new AwesomeException(Config.OrderNotExist);
         }
         if (uris != null) {
-            uris.forEach(uri -> {
-                LogicUriInfo info = new LogicUriInfo();
-                info.logicUri = uri;
+            for (int i = 0; i < uris.size(); i++) {
+                LabelInfo info = new LabelInfo(i, uris.size(), saleOrder, uris.get(i));
                 try {
-                    info.isReady = getPictureService().getOrderPictureByPath(uri).execute().isSuccessful() ? Boolean.TRUE : Boolean.FALSE;
-                    uriInfos.add(info);
+                    Boolean isReady = getPictureService().getOrderPictureByPath(uris.get(i)).execute().isSuccessful() ? Boolean.TRUE : Boolean.FALSE;
+                    info.setIsReady(isReady);
+                    labelInfos.add(info);
                 } catch (IOException ex) {
                     ex.printStackTrace();
-                    info.isReady = Boolean.FALSE;
-                    uriInfos.add(info);
+                    info.setIsReady(Boolean.FALSE);
+                    labelInfos.add(info);
                 }
-            });
+            }
         }
-        return uriInfos;
+        return labelInfos;
     }
 
     /**
-     * 通过逻辑链接获取面单图片
+     * 通过唯一码获取面单图片
      *
-     * @param logicUri 面单逻辑地址
-     * @return 面单图片流
+     * @param uniqueCode 面单唯一码
+     * @return 面单图片字节流
      */
-    public InputStream getWaybillImage(String logicUri) {
+    public InputStream getLabelImageByUniqueCode(String uniqueCode) {
         try {
-            Response<ResponseBody> response = getPictureService().getOrderPictureByPath(logicUri).execute();
+            Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
             if (response != null && response.isSuccessful()) {
                 return response.body().byteStream();
             } else {
-                System.out.println("response的code" + response.code());
-                throw new AwesomeException(Config.WAY_BILL_NOT_READY);
+                throw new AwesomeException(Config.LabelNotReady);
             }
         } catch (IOException ex) {
-            throw new AwesomeException(Config.LOGIC_URI_ERROR_OR_NOT_EXIST);
+            throw new AwesomeException(Config.LabelNotExist);
         }
     }
 
     /**
-     * 通过逻辑链接请求打印面单. 支持批量打印, 并自动等待未生成的面单
+     * 分包 当存在一件多包的情况时，需要先进行分包操作，面单服务依据新的信息重新生成面单
      *
-     * @param logicUriList   逻辑连接列表
-     * @param count          份数
-     * @param printerXoffset X偏移量
-     * @param printerYoffset Y偏移量
-     * @param printerWidth   宽度
-     * @param printerHeight  高度
-     * @return 打印结果以异步回调的方式进行通知
+     * @param saleOrder    批次号
+     * @param carrierCode  承运商编码，使用快递100的编码
+     * @param packageCount 包裹数
+     * @param packageList  货物信息
+     * @param remark       运单备注（不超过20字）
+     * @return 面单信息列表，兼容多包裹
      */
-    public void printWaybillByLogicUri(List<String> logicUriList, int count, int printerXoffset,
-                                       int printerYoffset, int printerWidth, int printerHeight) {
-        Thread thread = new Thread(() -> logicUriList.forEach(logicUrl -> {
-            try {
-                Response<ResponseBody> response = getPictureService().getOrderPictureByPath(logicUrl).execute();
-                if (response.isSuccessful()) {
-                    PrintResult printResult = printWaybill(response.body().byteStream(), count, printerXoffset, printerYoffset, printerWidth, printerHeight);
-                    listener.onLogicUriPrint(logicUrl, printResult.isSuccess, printResult.code, printResult.result);
-                } else {
-                    listener.onLogicUriPrint(logicUrl, false, 0, "picture not exists");
-                }
-            } catch (IOException ex) {
-                ex.printStackTrace();
-                listener.onLogicUriPrint(logicUrl, false, -1, "server unreachable");
-            }
-        }));
-        thread.start();
+    public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Integer packageCount, List<Package> packageList, String remark) {
+        List<LabelInfo> labelInfos = new ArrayList<>();
+        List<String> uris;
         try {
-            thread.join();
-        } catch (InterruptedException ex) {
-            ex.printStackTrace();
+            uris = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, remark, packageList).execute().body();
+        } catch (IOException ex) {
+            throw new AwesomeException(Config.OrderNotExist);
         }
+        if (uris != null) {
+            for (int i = 0; i < uris.size(); i++) {
+                LabelInfo info = new LabelInfo(i, uris.size(), saleOrder, uris.get(i));
+                try {
+                    Boolean isReady = getPictureService().getOrderPictureByPath(uris.get(i)).execute().isSuccessful() ? Boolean.TRUE : Boolean.FALSE;
+                    info.setIsReady(isReady);
+                    labelInfos.add(info);
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                    info.setIsReady(Boolean.FALSE);
+                    labelInfos.add(info);
+                }
+            }
+        }
+        return labelInfos;
+    }
 
+    /**
+     * 通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单. 打印结果以异步回调方式进行通知
+     *
+     * @param uniqueCodeList 唯一码列表
+     * @param printer        指定打印机（为null时，默认使用当前打印机）
+     * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
+     */
+    public void printLabelByUniqueCode(List<String> uniqueCodeList, String printer) {
+        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
+        ExecutorService executorService = Executors.newFixedThreadPool(1);
+        executorService.execute(() -> {
+            for (int i = 0; i < uniqueCodeList.size(); i++) {
+                try {
+                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
+                    if (response.isSuccessful()) {
+                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream());
+                        PrintResult printResult = printWaybill(currPrinter, inputStream);
+                        LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
+                        labelInfo.setIsReady(Boolean.TRUE);
+                        listener.onUniqueCodePrint(uniqueCodeList.get(i), printResult.isSuccess, labelInfo, printResult.code, printResult.result);
+                    } else {
+                        LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
+                        labelInfo.setIsReady(Boolean.FALSE);
+                        listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, 0, "label not exists");
+                    }
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
+                    labelInfo.setIsReady(Boolean.FALSE);
+                    listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, -1, "server unreachable");
+                }
+            }
+        });
+        executorService.shutdown();
     }
 
     /**
      * 通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
      *
-     * @param saleOrderList  批次号列表
-     * @param count          份数
-     * @param printerXoffset X偏移量
-     * @param printerYoffset Y偏移量
-     * @param printerWidth   宽度
-     * @param printerHeight  高度
+     * @param saleOrderList 批次号列表
+     * @param printer       指定打印机（为null时，默认使用当前打印机）
+     * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void printWaybillBySaleOrder(List<String> saleOrderList, int count, int printerXoffset,
-                                        int printerYoffset, int printerWidth, int printerHeight) {
-        Thread thread = new Thread(() ->
-        {
+    public void printLabelBySaleOrder(List<String> saleOrderList, String printer) {
+        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
+        ExecutorService executorService = Executors.newFixedThreadPool(1);
+        executorService.execute(() -> {
             for (int i = 0; i < saleOrderList.size(); i++) {
                 String saleOrder = saleOrderList.get(i);
                 try {
-                    Response<List<String>> response = getWaybillService().getOrderNamesByBatchNumber(saleOrder).execute();
+                    Response<List<String>> response = getWaybillService().getLabelInfo(saleOrder).execute();
                     if (response.isSuccessful()) {  //200
-                        List<String> logicUris = response.body();
-                        if (logicUris != null && logicUris.size() != 0) {
-                            printWaybillByStream(logicUris, saleOrder, i, count, printerXoffset, printerYoffset, printerWidth, printerHeight);
+                        List<String> uniqueCodeList = response.body();
+                        if (uniqueCodeList != null && uniqueCodeList.size() != 0) {
+                            printWaybillByStream(currPrinter, uniqueCodeList, saleOrder);
                         }
                     } else {
                         if (response.code() == 404) {  //404
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, -1, i, null, -3, "resource not exists");
+                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -3, "resource not exists");
                         } else if (response.code() == 102) {  //102
                             ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
                             final CountDownLatch countDownLatch = new CountDownLatch(1);
                             final Map<String, Future> futures = new HashMap<>();
                             final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
-                            int finalI = i;
                             Future future = executor.scheduleWithFixedDelay(() -> {
                                 if (flag.get() && futures.get("sale_order") != null) {
                                     futures.get("sale_order").cancel(true);
                                     countDownLatch.countDown();
                                 }
                                 try {
-                                    Response<List<String>> newResponse = getWaybillService().getOrderNamesByBatchNumber(saleOrder).execute();
+                                    Response<List<String>> newResponse = getWaybillService().getLabelInfo(saleOrder).execute();
                                     if (newResponse.isSuccessful()) {
-                                        List<String> logicUris = newResponse.body();
-                                        if (logicUris != null && logicUris.size() != 0) {
-                                            printWaybillByStream(logicUris, saleOrder, finalI, count, printerXoffset, printerYoffset, printerWidth, printerHeight);
+                                        List<String> uniqueCodeList = newResponse.body();
+                                        if (uniqueCodeList != null && uniqueCodeList.size() != 0) {
+                                            printWaybillByStream(currPrinter, uniqueCodeList, saleOrder);
                                         } else {
-                                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, -1, finalI, null, -3, "resource not exists");
+                                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -3, "resource not exists");
                                         }
                                         flag.set(Boolean.TRUE);
                                     }
                                 } catch (IOException ex) {
                                     ex.printStackTrace();
-                                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, -1, finalI, null, -1, "server unreachable");
+                                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
                                     flag.set(Boolean.TRUE);
                                 }
                             }, 0, 2, TimeUnit.SECONDS);
@@ -294,66 +341,62 @@ public class WaybillSDK {
                                 countDownLatch.await();
                             } catch (InterruptedException ex) {
                                 log.info("countDownLatch await failure");
-                                throw new AwesomeException(Config.ERROR_EXECUTOR_INTERRUPT);
+                                throw new AwesomeException(Config.ErrorEexcutorInterrupt);
                             }
                             executor.shutdown();
                         } else {  //500
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, -1, i, null, -1, "server unreachable");
+                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
                         }
                     }
                 } catch (IOException ex) {
                     ex.printStackTrace();
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, -1, i, null, -1, "server unreachable");
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
                 }
             }
-        }
-        );
-        thread.start();
-        try {
-            thread.join();
-        } catch (InterruptedException ex) {
-            ex.printStackTrace();
-        }
+        });
+        executorService.shutdown();
     }
 
-    private void printWaybillByStream(List<String> logicUriList, String saleOrder, int index, int count, int printerXoffset,
-                                      int printerYoffset, int printerWidth, int printerHeight) {
-        for (String logicUri : logicUriList) {
+    private void printWaybillByStream(PrintService printService, List<String> uniqueCodeList, String saleOrder) {
+        for (int i = 0; i < uniqueCodeList.size(); i++) {
             try {
-                Response<ResponseBody> pictureResponse = getPictureService().getOrderPictureByPath(logicUri).execute();
+                Response<ResponseBody> pictureResponse = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
                 if (pictureResponse.isSuccessful()) {
-                    PrintResult result = printWaybill(pictureResponse.body().byteStream(), count, printerXoffset, printerYoffset, printerWidth, printerHeight);
-                    listener.onSaleOrderPrint(saleOrder, result.isSuccess, logicUriList.size(), index, logicUri, result.code, result.result);
+                    PrintResult result = printWaybill(printService, pictureResponse.body().byteStream());
+                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
+                    labelInfo.setIsReady(Boolean.TRUE);
+                    listener.onSaleOrderPrint(saleOrder, result.isSuccess, labelInfo, result.code, result.result);
                 } else {
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, logicUriList.size(), index, logicUri, -3, "resource not exists");
+                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
+                    labelInfo.setIsReady(Boolean.FALSE);
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, -3, "resource not exists");
                 }
             } catch (IOException ex) {
                 ex.printStackTrace();
-                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, logicUriList.size(), index, logicUri, -1, "server unreachable");
+                LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
+                labelInfo.setIsReady(Boolean.FALSE);
+                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, -1, "server unreachable");
             }
         }
     }
 
-    private PrintResult printWaybill(InputStream inputStream, int count, int printerXoffset,
-                                     int printerYoffset, int printerWidth, int printerHeight) {
+    private PrintResult printWaybill(PrintService printService, InputStream inputStream) {
         PrintResult result = new PrintResult();
-        DocFlavor dof = DocFlavor.INPUT_STREAM.JPEG;
-        PrintRequestAttributeSet pras = new HashPrintRequestAttributeSet();
+        DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
+        HashPrintRequestAttributeSet pras = new HashPrintRequestAttributeSet();
         pras.add(OrientationRequested.PORTRAIT);
         pras.add(PrintQuality.HIGH);
-        pras.add(new Copies(count));
-        DocAttributeSet das = new HashDocAttributeSet();
-        das.add(new MediaPrintableArea(printerXoffset, printerYoffset,
-                printerWidth, printerHeight, MediaPrintableArea.MM));
+        pras.add(new Copies(1));
+        pras.add(MediaSizeName.ISO_A6);
         try {
-            Doc doc = new SimpleDoc(inputStream, dof, das);
+            Doc doc = new SimpleDoc(inputStream, dof, null);
             DocPrintJob job = printService.createPrintJob();
             job.addPrintJobListener(new PrintJobAdapter() {
                 @Override
                 public void printJobNoMoreEvents(PrintJobEvent pje) {
                     result.isSuccess = Boolean.TRUE;
                     result.code = pje.getPrintEventType();
-                    result.result = "打印成功，等待其他打印服务";
+                    result.result = "print success, please wait for next print job";
                 }
             });
             job.print(doc, pras);
@@ -361,7 +404,7 @@ public class WaybillSDK {
             ex.printStackTrace();
             result.code = -2;
             result.isSuccess = Boolean.FALSE;
-            result.result = "打印故障，请检查是否有可用打印设备";
+            result.result = "print failed, please check if the printer available";
         }
         return result;
     }

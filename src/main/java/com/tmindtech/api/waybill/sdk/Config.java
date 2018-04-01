@@ -10,19 +10,23 @@ public class Config {
      */
     public static final int MODEL_CODE = 1;
 
-    public static final ErrorCode SALE_ORDER_ERROR_OR_NOT_EXIST
+    public static final ErrorCode OrderNotExist
             = new ErrorCode(HttpServletResponse.SC_BAD_REQUEST, MODEL_CODE,
             1, "批次号错误或不存在");
 
-    public static final ErrorCode LOGIC_URI_ERROR_OR_NOT_EXIST
+    public static final ErrorCode LabelNotExist
             = new ErrorCode(HttpServletResponse.SC_BAD_REQUEST, MODEL_CODE,
             2, "逻辑链接错误或不存在");
 
-    public static final ErrorCode WAY_BILL_NOT_READY
+    public static final ErrorCode LabelNotReady
             = new ErrorCode(HttpServletResponse.SC_BAD_REQUEST, MODEL_CODE,
             3, "图片还在生成");
 
-    public static final ErrorCode ERROR_EXECUTOR_INTERRUPT
+    public static final ErrorCode ErrorEexcutorInterrupt
             = new ErrorCode(HttpServletResponse.SC_BAD_REQUEST, MODEL_CODE,
             4, "线程连接池中断异常");
+
+    public static final ErrorCode PrinterNotExist
+            = new ErrorCode(HttpServletResponse.SC_BAD_REQUEST, MODEL_CODE,
+            5, "该打印机不存在");
 }

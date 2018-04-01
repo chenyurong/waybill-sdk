@@ -2,7 +2,7 @@ package com.tmindtech.api.waybill.sdk.test;
 
 import com.tmindtech.api.waybill.sdk.PrintListener;
 import com.tmindtech.api.waybill.sdk.WaybillSDK;
-import com.tmindtech.api.waybill.sdk.model.LogicUriInfo;
+import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -35,7 +35,7 @@ public class WaybillSDKTest implements PrintListener {
         sdk.setPrintListener(WaybillSDKTest.this);
 
         //通过批次号获取面单逻辑地址列表（兼容一件多单）
-        List<LogicUriInfo> infos = sdk.getWaybillAddress("saleOrder");
+        List<LabelInfo> infos = sdk.getWaybillAddress("saleOrder");
         System.out.println("通过批次号获取的所有逻辑地址和可读状态：");
         infos.forEach(info -> System.out.println("逻辑地址为：" + info.logicUri + ",可用状态为：" + info.isReady));
 
@@ -62,15 +62,14 @@ public class WaybillSDKTest implements PrintListener {
         logicUriList.add("1.jpg");
         logicUriList.add("huida.jpg");
 
-        sdk.printWaybillByLogicUri(logicUriList, 1, 0,
-                0, 210, 297);
+        sdk.printWaybillByLogicUri(logicUriList, 1, 210, 297);
 
 
         //通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
         List<String> saleOrderList = new ArrayList<>();
         saleOrderList.add("batch1");
         saleOrderList.add("batch2");
-        sdk.printWaybillBySaleOrder(saleOrderList, 1, 0, 0, 210, 297);
+        sdk.printWaybillBySaleOrder(saleOrderList, 1, 210, 297);
     }
 
     @Override

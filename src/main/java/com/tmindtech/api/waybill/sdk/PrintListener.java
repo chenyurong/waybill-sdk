@@ -1,9 +1,11 @@
 package com.tmindtech.api.waybill.sdk;
 
+import com.tmindtech.api.waybill.sdk.model.LabelInfo;
+
 public interface PrintListener {
 
-    void onLogicUriPrint(String logicUri, Boolean isSuccess, Number errorCode, String errorMessage);
+    void onUniqueCodePrint(String uniqueCode, Boolean isSuccess, LabelInfo labelInfo, Integer errorCode, String errorMessage);
 
-    void onSaleOrderPrint(String saleOrder, Boolean isSuccess, Number totalCount, Number index, String logicUri, Number errorCode, String errorMessage);
+    void onSaleOrderPrint(String saleOrder, Boolean isSuccess, LabelInfo labelInfo, Integer errorCode, String errorMessage);
 
 }

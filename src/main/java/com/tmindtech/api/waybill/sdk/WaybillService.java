@@ -1,10 +1,14 @@
 package com.tmindtech.api.waybill.sdk;
 
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
+import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
 import java.util.List;
 import retrofit2.Call;
+import retrofit2.http.Body;
+import retrofit2.http.Field;
 import retrofit2.http.GET;
+import retrofit2.http.POST;
 import retrofit2.http.Query;
 
 /**
@@ -37,9 +41,13 @@ public interface WaybillService {
     /**
      * 根据批次号获取生成面单的存储地址列表
      *
-     * @param batch 批次号
-     * @return 面单存储地址列表
+     * @param order 批次号
+     * @return 面单唯一码列表
      */
-    @GET("api/v1/batch_number")
-    Call<List<String>> getOrderNamesByBatchNumber(@Query("batch") String batch);
+    @GET("api/v1/order")
+    Call<List<String>> getLabelInfo(@Query("order") String order);
+
+    @POST("api/v1/split")
+    Call<List<String>> splitPackage(@Field("saleOrder") String saleOrder, @Field("carrierCode") String carrierCode,
+                                    @Field("packageCount") Integer packageCount, @Field("remark") String remark, @Body List<Package> packageList);
 }
