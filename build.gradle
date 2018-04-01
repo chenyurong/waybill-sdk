@@ -11,9 +11,6 @@ repositories {
 }
 
 dependencies {
-    // image图像处理
-    compile 'org.apache.sanselan:sanselan:0.97-incubator'
-    compile 'org.w3c:dom:2.3.0-jaxb-1.0.6'
 
     // https://mvnrepository.com/artifact/com.squareup.retrofit2/retrofit
     compile group: 'com.squareup.retrofit2', name: 'retrofit', version: '2.3.0'
@@ -33,7 +30,9 @@ dependencies {
     // https://mvnrepository.com/artifact/org.projectlombok/lombok
     compile group: 'org.projectlombok', name: 'lombok', version: '1.16.20'
 
-
+    // image图像处理
+    compile 'org.apache.sanselan:sanselan:0.97-incubator'
+    compile 'org.w3c:dom:2.3.0-jaxb-1.0.6'
 }
 
 dependencies {
