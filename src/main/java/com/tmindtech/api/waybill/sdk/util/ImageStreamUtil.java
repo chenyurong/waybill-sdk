@@ -1,13 +1,9 @@
 package com.tmindtech.api.waybill.sdk.util;
 
-import com.sun.image.codec.jpeg.JPEGCodec;
-import com.sun.image.codec.jpeg.JPEGEncodeParam;
-import com.sun.image.codec.jpeg.JPEGImageEncoder;
-import java.awt.Graphics2D;
-import java.awt.Image;
 import java.awt.geom.AffineTransform;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -18,12 +14,17 @@ import java.util.Optional;
 import java.util.Set;
 import javafx.print.PrintResolution;
 import javafx.print.Printer;
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
+import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.metadata.IIOInvalidTreeException;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
-import javax.imageio.stream.MemoryCacheImageInputStream;
+import javax.imageio.stream.ImageOutputStream;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -91,8 +92,10 @@ public class ImageStreamUtil {
 
             BufferedImage bufferedImage = fastResample(ImageIO.read(cacher.getInputStream()), null, convertWidth, convertHeight, 1);
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            ImageIO.write(bufferedImage, "png", bos);
-            return ImageStreamUtil.setImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, crossResolution, feedResolution);
+            BufferedOutputStream bufferStream = new BufferedOutputStream(bos);
+            ImageIO.write(bufferedImage, "png", bufferStream);
+            bufferStream.close();
+            return resetImageDpi(new ByteArrayInputStream(bos.toByteArray()), crossResolution, feedResolution);
         } catch (IOException ex) {
             ex.printStackTrace();
         }
@@ -100,49 +103,67 @@ public class ImageStreamUtil {
     }
 
     /**
-     * 设置图片的DPI
+     * 重置图片的dpi
      *
      * @param inputStream 图片输入流
-     * @param width       width
-     * @param height      height
-     * @param crossDpi    水平DPI
-     * @param feedDpi     垂直DPI
-     * @return 返回重新设置DPI后的图片流
+     * @param crossDpi    水平dpi
+     * @param feedDpi     垂直dpi
+     * @return 重置后的图片流
      */
-    private static InputStream setImageDpi(InputStream inputStream, int width, int height, int crossDpi, int feedDpi) {
-        try {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            ImageReader reader = ImageIO.getImageReadersByFormatName("png").next();
-            reader.setInput(new MemoryCacheImageInputStream(inputStream), true, false);
-            BufferedImage image = reader.read(0);
-
-            Image rescaled = image.getScaledInstance(width, height, Image.SCALE_AREA_AVERAGING);
-            BufferedImage output = toBufferedImage(rescaled, BufferedImage.TYPE_INT_RGB);
-
-            JPEGImageEncoder jpegEncoder = JPEGCodec.createJPEGEncoder(outputStream);
-            JPEGEncodeParam jpegEncodeParam = jpegEncoder.getDefaultJPEGEncodeParam(output);
-            jpegEncodeParam.setDensityUnit(JPEGEncodeParam.DENSITY_UNIT_DOTS_INCH);
-            jpegEncodeParam.setQuality(1.0f, true);
-            jpegEncodeParam.setXDensity(crossDpi);
-            jpegEncodeParam.setYDensity(feedDpi);
-
-            jpegEncoder.encode(output, jpegEncodeParam);
-            outputStream.flush();
-            return new ByteArrayInputStream(outputStream.toByteArray());
-        } catch (Exception ex) {
-            ex.printStackTrace();
+    private static InputStream resetImageDpi(InputStream inputStream, int crossDpi, int feedDpi) {
+        for (Iterator<ImageWriter> iw = ImageIO.getImageWritersByFormatName("png"); iw.hasNext(); ) {
+            ImageWriter writer = iw.next();
+            ImageWriteParam writeParam = writer.getDefaultWriteParam();
+            ImageTypeSpecifier typeSpecifier = ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_RGB);
+            IIOMetadata metadata = writer.getDefaultImageMetadata(typeSpecifier, writeParam);
+            if (metadata.isReadOnly() || !metadata.isStandardMetadataFormatSupported()) {
+                continue;
+            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            ImageOutputStream stream = null;
+            try {
+                setDPI(metadata, crossDpi, feedDpi);
+                stream = ImageIO.createImageOutputStream(output);
+                writer.setOutput(stream);
+                writer.write(metadata, new IIOImage(ImageIO.read(inputStream), null, metadata), writeParam);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            } finally {
+                try {
+                    if (stream != null) {
+                        stream.close();
+                    }
+                } catch (IOException ignore) {
+                }
+            }
+            return new ByteArrayInputStream(output.toByteArray());
         }
         return null;
     }
 
-    private static BufferedImage toBufferedImage(Image image, int type) {
-        int w = image.getWidth(null);
-        int h = image.getHeight(null);
-        BufferedImage result = new BufferedImage(w, h, type);
-        Graphics2D g = result.createGraphics();
-        g.drawImage(image, 0, 0, null);
-        g.dispose();
-        return result;
+    private static void setDPI(IIOMetadata metadata, int crossDpi, int feedDpi) {
+
+        // for PMG, it's dots per millimeter
+        double crossDotsPerMilli = 1.0 * crossDpi / INCH_2_MM;
+        double feedDotsPerMilli = 1.0 * feedDpi / INCH_2_MM;
+        IIOMetadataNode horiz = new IIOMetadataNode("HorizontalPixelSize");
+        horiz.setAttribute("value", Double.toString(crossDotsPerMilli));
+
+        IIOMetadataNode vert = new IIOMetadataNode("VerticalPixelSize");
+        vert.setAttribute("value", Double.toString(feedDotsPerMilli));
+
+        IIOMetadataNode dim = new IIOMetadataNode("Dimension");
+        dim.appendChild(horiz);
+        dim.appendChild(vert);
+
+        IIOMetadataNode root = new IIOMetadataNode("javax_imageio_1.0");
+        root.appendChild(dim);
+
+        try {
+            metadata.mergeTree("javax_imageio_1.0", root);
+        } catch (IIOInvalidTreeException ex) {
+            ex.printStackTrace();
+        }
     }
 
     /**

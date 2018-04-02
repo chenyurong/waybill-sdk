@@ -1,5 +1,6 @@
 package com.tmindtech.api.waybill.sdk.util;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -20,14 +21,20 @@ public class InputStreamCacher {
             return;
 
         byteArrayOutputStream = new ByteArrayOutputStream();
+        BufferedOutputStream bos = new BufferedOutputStream(byteArrayOutputStream);
         byte[] buffer = new byte[1024];
         int len;
         try {
             while ((len = inputStream.read(buffer)) > -1) {
-                byteArrayOutputStream.write(buffer, 0, len);
+                bos.write(buffer, 0, len);
             }
-            byteArrayOutputStream.flush();
+            bos.flush();
         } catch (IOException ignored) {
+        }
+        try {
+            bos.close();
+        } catch (IOException ex) {
+            ex.printStackTrace();
         }
     }
 

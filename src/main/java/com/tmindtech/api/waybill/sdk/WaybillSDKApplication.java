@@ -34,28 +34,28 @@ public class WaybillSDKApplication implements PrintListener {
         sdk.setPrintListener(new WaybillSDKApplication());
 
         //通过批次号获取面单信息，然后通过逻辑连接/唯一码获取面单图片
-        List<LabelInfo> infos = sdk.getLabelInfo("saleOrder");
+        List<LabelInfo> infos = sdk.getLabelInfo("saleOrder1");
         System.out.println("通过批次号获取的所有面单信息和可读状态：");
         infos.forEach(info -> System.out.println(info.toString()));
 
-        //通过逻辑链接获取面单图片流
+        //通过唯一码获取面单图片流
         InputStream inputStream1 = sdk.getLabelImageByUniqueCode("11.png");
         try {
-            System.out.println("指定的逻辑地址获取的流是否可用：");
+            System.out.println("指定的唯一码获取的流是否可用：");
             System.out.println(inputStream1.available());
         } catch (IOException ex) {
-            System.out.println("测试2的逻辑地址：应该能用，不报错显示！");
+            System.out.println("测试2的唯一码：应该能用，不报错显示！");
         }
-        //通过逻辑链接获取面单图片流
+        //通过唯一码获取面单图片流
         InputStream inputStream2 = sdk.getLabelImageByUniqueCode("miandan.jpg");
         try {
-            System.out.println("指定的逻辑地址获取的流是否可用：");
+            System.out.println("指定的唯一码获取的流是否可用：");
             System.out.println(inputStream2.available());
         } catch (IOException ex) {
-            System.out.println("测试1的逻辑地址：应该报错显示！");
+            System.out.println("测试1的唯一码：应该报错显示！");
         }
 
-        //通过逻辑链接请求打印面单. 支持批量打印, 并自动等待未生成的面单
+        //通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单
         List<String> logicUriList = new ArrayList<>();
         logicUriList.add("72dpi.png");
         sdk.printLabelByUniqueCode(logicUriList, "HP LaserJet Professional M1213nf MFP");

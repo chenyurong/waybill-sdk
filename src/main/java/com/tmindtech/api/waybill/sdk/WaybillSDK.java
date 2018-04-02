@@ -297,8 +297,7 @@ public class WaybillSDK {
         PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
         ExecutorService executorService = Executors.newFixedThreadPool(1);
         executorService.execute(() -> {
-            for (int i = 0; i < saleOrderList.size(); i++) {
-                String saleOrder = saleOrderList.get(i);
+            for (String saleOrder : saleOrderList) {
                 try {
                     Response<List<String>> response = getWaybillService().getLabelInfo(saleOrder).execute();
                     if (response.isSuccessful()) {  //200

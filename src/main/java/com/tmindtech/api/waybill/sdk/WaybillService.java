@@ -39,15 +39,25 @@ public interface WaybillService {
     }
 
     /**
-     * 根据批次号获取生成面单的存储地址列表
+     * 根据批次号获取生成面单的唯一码列表
      *
-     * @param order 批次号
+     * @param saleOrder 批次号
      * @return 面单唯一码列表
      */
-    @GET("api/v1/order")
-    Call<List<String>> getLabelInfo(@Query("order") String order);
+    @GET("api/v1/sale_order")
+    Call<List<String>> getLabelInfo(@Query("sale_order") String saleOrder);
 
+    /**
+     * 根据批次号重新下单获取面单唯一码列表
+     *
+     * @param saleOrder    批次号
+     * @param carrierCode  承运商编码
+     * @param packageCount 包裹数量
+     * @param remark       备注
+     * @param packageList  货物信息
+     * @return 面单唯一码列表
+     */
     @POST("api/v1/split")
-    Call<List<String>> splitPackage(@Field("saleOrder") String saleOrder, @Field("carrierCode") String carrierCode,
-                                    @Field("packageCount") Integer packageCount, @Field("remark") String remark, @Body List<Package> packageList);
+    Call<List<String>> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
+                                    @Field("package_count") Integer packageCount, @Field("remark") String remark, @Body List<Package> packageList);
 }
