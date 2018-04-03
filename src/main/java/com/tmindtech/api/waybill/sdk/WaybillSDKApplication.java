@@ -57,13 +57,13 @@ public class WaybillSDKApplication implements PrintListener {
 
         //通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单
         List<String> logicUriList = new ArrayList<>();
-        logicUriList.add("72dpi.png");
-        sdk.printLabelByUniqueCode(logicUriList, "HP LaserJet Professional M1213nf MFP");
+        logicUriList.add("300dpi.png");
+        sdk.printLabelByUniqueCode(logicUriList, "HPRT HLP106S-UE");
 
         //通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
-        List<String> saleOrderList = new ArrayList<>();
-        saleOrderList.add("batch1");
-        sdk.printLabelBySaleOrder(saleOrderList, null);
+//        List<String> saleOrderList = new ArrayList<>();
+//        saleOrderList.add("batch1");
+//        sdk.printLabelBySaleOrder(saleOrderList, "HPRT HLP106S-UE");
     }
 
     @Override

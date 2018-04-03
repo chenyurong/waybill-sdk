@@ -1,5 +1,10 @@
 package com.tmindtech.api.waybill.sdk.util;
 
+import com.sun.image.codec.jpeg.JPEGCodec;
+import com.sun.image.codec.jpeg.JPEGEncodeParam;
+import com.sun.image.codec.jpeg.JPEGImageEncoder;
+import java.awt.Graphics2D;
+import java.awt.Image;
 import java.awt.geom.AffineTransform;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
@@ -8,23 +13,15 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Comparator;
 import java.util.Iterator;
-import java.util.Optional;
-import java.util.Set;
-import javafx.print.PrintResolution;
-import javafx.print.Printer;
-import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
-import javax.imageio.ImageTypeSpecifier;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.metadata.IIOInvalidTreeException;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
-import javax.imageio.stream.ImageOutputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
+import javax.print.PrintService;
+import javax.print.attribute.standard.PrinterResolution;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -32,6 +29,7 @@ import org.w3c.dom.NodeList;
 /**
  * 图片流处理工具类
  */
+@SuppressWarnings("sunapi")
 public class ImageStreamUtil {
     // 1英寸是25.4毫米
     private static final float INCH_2_MM = 25.4f;
@@ -40,11 +38,16 @@ public class ImageStreamUtil {
      * @param inputStream 需要转换的目标图片流
      * @return 转换后的结果图片流 如果打印机未设置成功，会抛出NullPointerException异常
      */
-    public static InputStream convertImageStream2MatchPrinter(InputStream inputStream) {
+    public static InputStream convertImageStream2MatchPrinter(InputStream inputStream, PrintService printService) {
         InputStreamCacher cacher = new InputStreamCacher(inputStream);
-        Set<PrintResolution> set = Printer.getDefaultPrinter().getPrinterAttributes().getSupportedPrintResolutions();
-        Optional<PrintResolution> optional = set.stream().max(Comparator.comparingInt(PrintResolution::getFeedResolution));
-        PrintResolution resolution = optional.orElseGet(null);
+        PrinterResolution resolution;
+        PrinterResolution[] resolutions = (PrinterResolution[]) printService.getSupportedAttributeValues(PrinterResolution.class, null, null);
+        if (resolutions == null || resolutions.length == 0) {
+            resolution = new PrinterResolution(300, 300, PrinterResolution.DPI);
+        } else {
+            resolution = resolutions[0];
+        }
+
         try {
             BufferedImage image = ImageIO.read(cacher.getInputStream());
             int width = image.getWidth();
@@ -87,83 +90,67 @@ public class ImageStreamUtil {
             int feedResolution = imageInfo.getPhysicalHeightDpi();
              */
 
-            int convertWidth = Math.round((float) width * resolution.getCrossFeedResolution() / crossResolution);
-            int convertHeight = Math.round((float) height * resolution.getFeedResolution() / feedResolution);
+            int xdpi = resolution.getCrossFeedResolution(PrinterResolution.DPI);
+            int ydpi = resolution.getFeedResolution(PrinterResolution.DPI);
+            int convertWidth = Math.round((float) width * xdpi / crossResolution);
+            int convertHeight = Math.round((float) height * ydpi / feedResolution);
 
             BufferedImage bufferedImage = fastResample(ImageIO.read(cacher.getInputStream()), null, convertWidth, convertHeight, 1);
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             BufferedOutputStream bufferStream = new BufferedOutputStream(bos);
             ImageIO.write(bufferedImage, "png", bufferStream);
             bufferStream.close();
-            return resetImageDpi(new ByteArrayInputStream(bos.toByteArray()), crossResolution, feedResolution);
+            return setImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, xdpi, ydpi);
         } catch (IOException ex) {
             ex.printStackTrace();
         }
         return null;
     }
 
+
     /**
-     * 重置图片的dpi
+     * 设置图片的DPI
      *
      * @param inputStream 图片输入流
-     * @param crossDpi    水平dpi
-     * @param feedDpi     垂直dpi
-     * @return 重置后的图片流
+     * @param width       width
+     * @param height      height
+     * @param crossDpi    水平DPI
+     * @param feedDpi     垂直DPI
+     * @return 返回重新设置DPI后的图片流
      */
-    private static InputStream resetImageDpi(InputStream inputStream, int crossDpi, int feedDpi) {
-        for (Iterator<ImageWriter> iw = ImageIO.getImageWritersByFormatName("png"); iw.hasNext(); ) {
-            ImageWriter writer = iw.next();
-            ImageWriteParam writeParam = writer.getDefaultWriteParam();
-            ImageTypeSpecifier typeSpecifier = ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_RGB);
-            IIOMetadata metadata = writer.getDefaultImageMetadata(typeSpecifier, writeParam);
-            if (metadata.isReadOnly() || !metadata.isStandardMetadataFormatSupported()) {
-                continue;
-            }
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            ImageOutputStream stream = null;
-            try {
-                setDPI(metadata, crossDpi, feedDpi);
-                stream = ImageIO.createImageOutputStream(output);
-                writer.setOutput(stream);
-                writer.write(metadata, new IIOImage(ImageIO.read(inputStream), null, metadata), writeParam);
-            } catch (IOException ex) {
-                ex.printStackTrace();
-            } finally {
-                try {
-                    if (stream != null) {
-                        stream.close();
-                    }
-                } catch (IOException ignore) {
-                }
-            }
-            return new ByteArrayInputStream(output.toByteArray());
+    private static InputStream setImageDpi(InputStream inputStream, int width, int height, int crossDpi, int feedDpi) {
+        try {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            ImageReader reader = ImageIO.getImageReadersByFormatName("png").next();
+            reader.setInput(new MemoryCacheImageInputStream(inputStream), true, false);
+            BufferedImage image = reader.read(0);
+
+            Image rescaled = image.getScaledInstance(width, height, Image.SCALE_AREA_AVERAGING);
+            BufferedImage output = toBufferedImage(rescaled, BufferedImage.TYPE_INT_RGB);
+            JPEGImageEncoder jpegEncoder = JPEGCodec.createJPEGEncoder(outputStream);
+            JPEGEncodeParam jpegEncodeParam = jpegEncoder.getDefaultJPEGEncodeParam(output);
+            jpegEncodeParam.setDensityUnit(JPEGEncodeParam.DENSITY_UNIT_DOTS_INCH);
+            jpegEncodeParam.setQuality(1.0f, true);
+            jpegEncodeParam.setXDensity(crossDpi);
+            jpegEncodeParam.setYDensity(feedDpi);
+
+            jpegEncoder.encode(output, jpegEncodeParam);
+            outputStream.flush();
+            return new ByteArrayInputStream(outputStream.toByteArray());
+        } catch (Exception ex) {
+            ex.printStackTrace();
         }
         return null;
     }
 
-    private static void setDPI(IIOMetadata metadata, int crossDpi, int feedDpi) {
-
-        // for PMG, it's dots per millimeter
-        double crossDotsPerMilli = 1.0 * crossDpi / INCH_2_MM;
-        double feedDotsPerMilli = 1.0 * feedDpi / INCH_2_MM;
-        IIOMetadataNode horiz = new IIOMetadataNode("HorizontalPixelSize");
-        horiz.setAttribute("value", Double.toString(crossDotsPerMilli));
-
-        IIOMetadataNode vert = new IIOMetadataNode("VerticalPixelSize");
-        vert.setAttribute("value", Double.toString(feedDotsPerMilli));
-
-        IIOMetadataNode dim = new IIOMetadataNode("Dimension");
-        dim.appendChild(horiz);
-        dim.appendChild(vert);
-
-        IIOMetadataNode root = new IIOMetadataNode("javax_imageio_1.0");
-        root.appendChild(dim);
-
-        try {
-            metadata.mergeTree("javax_imageio_1.0", root);
-        } catch (IIOInvalidTreeException ex) {
-            ex.printStackTrace();
-        }
+    private static BufferedImage toBufferedImage(Image image, int type) {
+        int w = image.getWidth(null);
+        int h = image.getHeight(null);
+        BufferedImage result = new BufferedImage(w, h, type);
+        Graphics2D g = result.createGraphics();
+        g.drawImage(image, 0, 0, null);
+        g.dispose();
+        return result;
     }
 
     /**

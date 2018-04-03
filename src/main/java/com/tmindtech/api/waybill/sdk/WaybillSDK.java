@@ -265,7 +265,7 @@ public class WaybillSDK {
                 try {
                     Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
                     if (response.isSuccessful()) {
-                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream());
+                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream(), currPrinter);
                         PrintResult printResult = printWaybill(currPrinter, inputStream);
                         LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
                         labelInfo.setIsReady(Boolean.TRUE);
@@ -361,7 +361,8 @@ public class WaybillSDK {
             try {
                 Response<ResponseBody> pictureResponse = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
                 if (pictureResponse.isSuccessful()) {
-                    PrintResult result = printWaybill(printService, pictureResponse.body().byteStream());
+                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(pictureResponse.body().byteStream(), printService);
+                    PrintResult result = printWaybill(printService, inputStream);
                     LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
                     labelInfo.setIsReady(Boolean.TRUE);
                     listener.onSaleOrderPrint(saleOrder, result.isSuccess, labelInfo, result.code, result.result);
