@@ -35,12 +35,33 @@ dependencies {
     compile 'org.w3c:dom:2.3.0-jaxb-1.0.6'
 }
 
-compileJava.options.compilerArgs.add '-XDignore.symbol.file'
-
-compileJava {
-    options.fork = true
-    options.forkOptions.executable = "javac" // assumes that javac is on PATH
-    options.compilerArgs << "-XDignore.symbol.file"
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'maven'
+    repositories {
+        file("/opt/jdk1.8.0_144/jre/lib/rt.jar")
+        flatDir { dirs "../lib" }
+        //mavenCentral()
+    }
+    configurations {
+        deployerJars
+    }
+    dependencies {
+        deployerJars "org.apache.maven.wagon:wagon-http:2.2"
+    }
+    sourceSets {
+        main {
+            java {
+                srcDir 'src'
+            }
+            resources {
+                srcDir 'src'
+            }
+        }
+    }
+}
+dependencies {
+    compile files("/opt/lib/rt.jar")
 }
 
 dependencies {
