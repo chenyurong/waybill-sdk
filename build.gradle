@@ -36,7 +36,6 @@ dependencies {
 }
 
 compileJava.options.compilerArgs.add '-XDignore.symbol.file'
-compileJava.options.useAnt = true
 
 compileJava {
     options.fork = true
