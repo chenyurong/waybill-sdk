@@ -33,6 +33,8 @@ dependencies {
     // image图像处理
     compile 'org.apache.sanselan:sanselan:0.97-incubator'
     compile 'org.w3c:dom:2.3.0-jaxb-1.0.6'
+
+    compile fileTree(dir: 'libs', include: ['*.jar'])
 }
 
 dependencies {
