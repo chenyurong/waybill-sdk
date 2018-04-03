@@ -61,7 +61,7 @@ subprojects {
     }
 }
 dependencies {
-    compile files("/opt/lib/rt.jar")
+    runtime files("/opt/lib/rt.jar")
 }
 
 dependencies {
