@@ -61,7 +61,7 @@ subprojects {
     }
 }
 dependencies {
-    runtime files("/opt/lib/rt.jar")
+    compileClasspath files("/opt/lib/rt.jar")
 }
 
 dependencies {
