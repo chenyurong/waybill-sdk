@@ -1,6 +1,5 @@
 package com.tmindtech.api.waybill.sdk;
 
-import com.tmindtech.api.waybill.sdk.exception.AwesomeException;
 import com.tmindtech.api.waybill.sdk.interceptor.HotSwitchInterceptor;
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
 import com.tmindtech.api.waybill.sdk.model.LabelInfo;
@@ -16,6 +15,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -141,16 +141,22 @@ public class WaybillSDK {
     /**
      * 通过打印机名称获取指定名称
      *
-     * @param name 指定打印机名称
+     * @param name  指定打印机名称
+     * @param index 唯一码和订单打印标识，0是唯一码打印，1是订单打印
      * @return 目标打印机名称
      */
-    public PrintService getPrinterByName(String name) {
+    public PrintService getPrinterByName(String name, int index) {
         DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
         HashAttributeSet hs = new HashAttributeSet();
         hs.add(new PrinterName(name, null));
         PrintService[] printServices = PrintServiceLookup.lookupPrintServices(dof, hs);
         if (printServices.length == 0) {
-            throw new AwesomeException(Config.PrinterNotExist);
+            if (index == 0) {
+                listener.onUniqueCodePrint(null, Boolean.FALSE, null, Constants.PRINTER_NOT_SUPPORT, "printer is not support");
+            } else {
+                listener.onSaleOrderPrint(null, Boolean.FALSE, null, Constants.PRINTER_NOT_SUPPORT, "printer is not support");
+            }
+            return null;
         } else {
             return printServices[0];
         }
@@ -173,27 +179,13 @@ public class WaybillSDK {
      */
     public List<LabelInfo> getLabelInfo(String saleOrder) {
         List<LabelInfo> labelInfos = new ArrayList<>();
-        List<String> uris;
+        List<String> uris = null;
         try {
             uris = getWaybillService().getLabelInfo(saleOrder).execute().body();
         } catch (IOException ex) {
-            throw new AwesomeException(Config.OrderNotExist);
+            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
         }
-        if (uris != null) {
-            for (int i = 0; i < uris.size(); i++) {
-                LabelInfo info = new LabelInfo(i, uris.size(), saleOrder, uris.get(i));
-                try {
-                    Boolean isReady = getPictureService().getOrderPictureByPath(uris.get(i)).execute().isSuccessful() ? Boolean.TRUE : Boolean.FALSE;
-                    info.setIsReady(isReady);
-                    labelInfos.add(info);
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-                    info.setIsReady(Boolean.FALSE);
-                    labelInfos.add(info);
-                }
-            }
-        }
-        return labelInfos;
+        return generateLabelInfo(labelInfos, uris, saleOrder);
     }
 
     /**
@@ -205,14 +197,15 @@ public class WaybillSDK {
     public InputStream getLabelImageByUniqueCode(String uniqueCode) {
         try {
             Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-            if (response != null && response.isSuccessful()) {
+            if (Objects.nonNull(response) && response.isSuccessful()) {
                 return response.body().byteStream();
             } else {
-                throw new AwesomeException(Config.LabelNotReady);
+                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_READY, "label not ready");
             }
         } catch (IOException ex) {
-            throw new AwesomeException(Config.LabelNotExist);
+            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_EXIST, "label not exist");
         }
+        return null;
     }
 
     /**
@@ -227,13 +220,17 @@ public class WaybillSDK {
      */
     public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Integer packageCount, List<Package> packageList, String remark) {
         List<LabelInfo> labelInfos = new ArrayList<>();
-        List<String> uris;
+        List<String> uris = null;
         try {
             uris = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, remark, packageList).execute().body();
         } catch (IOException ex) {
-            throw new AwesomeException(Config.OrderNotExist);
+            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
         }
-        if (uris != null) {
+        return generateLabelInfo(labelInfos, uris, saleOrder);
+    }
+
+    private List<LabelInfo> generateLabelInfo(List<LabelInfo> labelInfos, List<String> uris, String saleOrder) {
+        if (Objects.nonNull(uris)) {
             for (int i = 0; i < uris.size(); i++) {
                 LabelInfo info = new LabelInfo(i, uris.size(), saleOrder, uris.get(i));
                 try {
@@ -258,7 +255,10 @@ public class WaybillSDK {
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
     public void printLabelByUniqueCode(List<String> uniqueCodeList, String printer) {
-        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
+        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer, 0);
+        if (Objects.isNull(currPrinter)) {
+            return;
+        }
         ExecutorService executorService = Executors.newFixedThreadPool(1);
         executorService.execute(() -> {
             for (int i = 0; i < uniqueCodeList.size(); i++) {
@@ -273,13 +273,13 @@ public class WaybillSDK {
                     } else {
                         LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
                         labelInfo.setIsReady(Boolean.FALSE);
-                        listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, 0, "label not exists");
+                        listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, Constants.LABEL_NOT_EXIST, "label not exist");
                     }
                 } catch (IOException ex) {
                     ex.printStackTrace();
                     LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
                     labelInfo.setIsReady(Boolean.FALSE);
-                    listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, -1, "server unreachable");
+                    listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, Constants.NETWORK_ERROR, "server unreachable");
                 }
             }
         });
@@ -294,7 +294,10 @@ public class WaybillSDK {
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
     public void printLabelBySaleOrder(List<String> saleOrderList, String printer) {
-        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
+        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer, 1);
+        if (Objects.isNull(currPrinter)) {
+            return;
+        }
         ExecutorService executorService = Executors.newFixedThreadPool(1);
         executorService.execute(() -> {
             for (String saleOrder : saleOrderList) {
@@ -307,7 +310,7 @@ public class WaybillSDK {
                         }
                     } else {
                         if (response.code() == 404) {  //404
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -3, "resource not exists");
+                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
                         } else if (response.code() == 102) {  //102
                             ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
                             final CountDownLatch countDownLatch = new CountDownLatch(1);
@@ -325,13 +328,13 @@ public class WaybillSDK {
                                         if (uniqueCodeList != null && uniqueCodeList.size() != 0) {
                                             printWaybillByStream(currPrinter, uniqueCodeList, saleOrder);
                                         } else {
-                                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -3, "resource not exists");
+                                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.UNICODE_NOT_EXIST, "unique not exist");
                                         }
                                         flag.set(Boolean.TRUE);
                                     }
                                 } catch (IOException ex) {
                                     ex.printStackTrace();
-                                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
+                                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                                     flag.set(Boolean.TRUE);
                                 }
                             }, 0, 2, TimeUnit.SECONDS);
@@ -340,16 +343,16 @@ public class WaybillSDK {
                                 countDownLatch.await();
                             } catch (InterruptedException ex) {
                                 log.info("countDownLatch await failure");
-                                throw new AwesomeException(Config.ErrorEexcutorInterrupt);
+                                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.UNKNOWN, "unknown error");
                             }
                             executor.shutdown();
                         } else {  //500
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
+                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                         }
                     }
                 } catch (IOException ex) {
                     ex.printStackTrace();
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, -1, "server unreachable");
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                 }
             }
         });
@@ -369,13 +372,13 @@ public class WaybillSDK {
                 } else {
                     LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
                     labelInfo.setIsReady(Boolean.FALSE);
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, -3, "resource not exists");
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, Constants.UNICODE_NOT_EXIST, "unique code not exist");
                 }
             } catch (IOException ex) {
                 ex.printStackTrace();
                 LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
                 labelInfo.setIsReady(Boolean.FALSE);
-                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, -1, "server unreachable");
+                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, Constants.NETWORK_ERROR, "server unreachable");
             }
         }
     }
@@ -395,14 +398,14 @@ public class WaybillSDK {
                 @Override
                 public void printJobNoMoreEvents(PrintJobEvent pje) {
                     result.isSuccess = Boolean.TRUE;
-                    result.code = pje.getPrintEventType();
+                    result.code = Constants.SUCCESS;
                     result.result = "print success, please wait for next print job";
                 }
             });
             job.print(doc, pras);
         } catch (PrintException ex) {
             ex.printStackTrace();
-            result.code = -2;
+            result.code = Constants.PRINTER_NOT_EXIST;
             result.isSuccess = Boolean.FALSE;
             result.result = "print failed, please check if the printer available";
         }
@@ -430,15 +433,18 @@ public class WaybillSDK {
     }
 
     @Getter(lazy = true)
-    private final PictureService pictureService = buildPictureService();
+    private final PictureService pictureService = buildPictureService(cloudServerAddress, localServerAddressList);
 
-    private PictureService buildPictureService() {
+    private PictureService buildPictureService(URL cloudServerAddress, List<URL> localServerAddressList) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
+                .addInterceptor(new HotSwitchInterceptor(localServerAddressList))
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(Constants.PICTURE_SERVER_URL)
+                .baseUrl(cloudServerAddress.toString())
                 .client(okHttpClient)
                 .build()
                 .create(PictureService.class);

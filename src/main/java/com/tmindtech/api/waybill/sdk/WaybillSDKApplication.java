@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 打印SDK接口方法测试
@@ -39,7 +40,7 @@ public class WaybillSDKApplication implements PrintListener {
         infos.forEach(info -> System.out.println(info.toString()));
 
         //通过唯一码获取面单图片流
-        InputStream inputStream1 = sdk.getLabelImageByUniqueCode("11.png");
+        InputStream inputStream1 = sdk.getLabelImageByUniqueCode("72dpi.png");
         try {
             System.out.println("指定的唯一码获取的流是否可用：");
             System.out.println(inputStream1.available());
@@ -50,7 +51,9 @@ public class WaybillSDKApplication implements PrintListener {
         InputStream inputStream2 = sdk.getLabelImageByUniqueCode("miandan.jpg");
         try {
             System.out.println("指定的唯一码获取的流是否可用：");
-            System.out.println(inputStream2.available());
+            if (Objects.nonNull(inputStream2)) {
+                System.out.println(inputStream2.available());
+            }
         } catch (IOException ex) {
             System.out.println("测试1的唯一码：应该报错显示！");
         }
@@ -67,17 +70,17 @@ public class WaybillSDKApplication implements PrintListener {
     }
 
     @Override
-    public void onUniqueCodePrint(String uniqueCode, Boolean isSuccess, LabelInfo labelInfo, Integer errorCode, String errorMessage) {
+    public void onUniqueCodePrint(String uniqueCode, Boolean isSuccess, LabelInfo labelInfo, Number errorCode, String errorMessage) {
         System.out.println("通过唯一码打印监听结果出来了：" + uniqueCode + "," + isSuccess + "," + errorCode + "," + errorMessage);
-        if (labelInfo != null) {
+        if (Objects.nonNull(labelInfo)) {
             System.out.println("labelInfo：" + labelInfo.toString());
         }
     }
 
     @Override
-    public void onSaleOrderPrint(String saleOrder, Boolean isSuccess, LabelInfo labelInfo, Integer errorCode, String errorMessage) {
+    public void onSaleOrderPrint(String saleOrder, Boolean isSuccess, LabelInfo labelInfo, Number errorCode, String errorMessage) {
         System.out.println("通过批次号打印监听结果出来了：" + saleOrder + "," + isSuccess + "," + errorCode + "," + errorMessage);
-        if (labelInfo != null) {
+        if (Objects.nonNull(labelInfo)) {
             System.out.println("labelInfo：" + labelInfo.toString());
         }
     }

@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Iterator;
+import java.util.Objects;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.metadata.IIOMetadata;
@@ -42,7 +43,7 @@ public class ImageStreamUtil {
         InputStreamCacher cacher = new InputStreamCacher(inputStream);
         PrinterResolution resolution;
         PrinterResolution[] resolutions = (PrinterResolution[]) printService.getSupportedAttributeValues(PrinterResolution.class, null, null);
-        if (resolutions == null || resolutions.length == 0) {
+        if (Objects.isNull(resolutions) || resolutions.length == 0) {
             resolution = new PrinterResolution(300, 300, PrinterResolution.DPI);
         } else {
             resolution = resolutions[0];

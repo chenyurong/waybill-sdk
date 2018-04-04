@@ -1,7 +1,7 @@
 package com.tmindtech.api.waybill.sdk.model;
 
 /**
- * 假装这个类有东西
+ *  示例Model
  */
 public class ExampleModel {
     private long id;

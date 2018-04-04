@@ -5,6 +5,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Objects;
 
 /**
  * 缓存输入流(此类可以重用InputStream)
@@ -17,9 +18,9 @@ public class InputStreamCacher {
     private ByteArrayOutputStream byteArrayOutputStream = null;
 
     public InputStreamCacher(InputStream inputStream) {
-        if (inputStream == null)
+        if (Objects.isNull(inputStream)) {
             return;
-
+        }
         byteArrayOutputStream = new ByteArrayOutputStream();
         BufferedOutputStream bos = new BufferedOutputStream(byteArrayOutputStream);
         byte[] buffer = new byte[1024];
@@ -39,9 +40,9 @@ public class InputStreamCacher {
     }
 
     public InputStream getInputStream() {
-        if (byteArrayOutputStream == null)
+        if (Objects.isNull(byteArrayOutputStream)) {
             return null;
-
+        }
         return new ByteArrayInputStream(byteArrayOutputStream.toByteArray());
     }
 }
