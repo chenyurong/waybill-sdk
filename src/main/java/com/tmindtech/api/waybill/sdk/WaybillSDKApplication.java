@@ -39,6 +39,11 @@ public class WaybillSDKApplication implements PrintListener {
         System.out.println("通过批次号获取的所有面单信息和可读状态：");
         infos.forEach(info -> System.out.println(info.toString()));
 
+        //重新下单获取面单信息，然后通过逻辑连接/唯一码获取面单图片
+        List<LabelInfo> labelInfos = sdk.splitPackage("saleOrder2", "45124521", 3, null, "split");
+        System.out.println("重新下单获取所有面单信息和可读状态：");
+        labelInfos.forEach(labelInfo -> System.out.println(labelInfo.toString()));
+
         //通过唯一码获取面单图片流
         InputStream inputStream1 = sdk.getLabelImageByUniqueCode("72dpi.png");
         try {
@@ -59,14 +64,14 @@ public class WaybillSDKApplication implements PrintListener {
         }
 
         //通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单
-        List<String> logicUriList = new ArrayList<>();
-        logicUriList.add("300dpi.png");
-        sdk.printLabelByUniqueCode(logicUriList, "HPRT HLP106S-UE");
+//        List<String> logicUriList = new ArrayList<>();
+//        logicUriList.add("300dpi.png");
+//        sdk.printLabelByUniqueCode(logicUriList, "HPRT HLP106S-UE");
 
         //通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
-//        List<String> saleOrderList = new ArrayList<>();
-//        saleOrderList.add("batch1");
-//        sdk.printLabelBySaleOrder(saleOrderList, "HPRT HLP106S-UE");
+        List<String> saleOrderList = new ArrayList<>();
+        saleOrderList.add("batch1");
+        sdk.printLabelBySaleOrder(saleOrderList, "HP LaserJet Professional M1213nf MFP");
     }
 
     @Override

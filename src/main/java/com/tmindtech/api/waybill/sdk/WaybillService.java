@@ -5,8 +5,8 @@ import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
 import java.util.List;
 import retrofit2.Call;
-import retrofit2.http.Body;
 import retrofit2.http.Field;
+import retrofit2.http.FormUrlEncoded;
 import retrofit2.http.GET;
 import retrofit2.http.POST;
 import retrofit2.http.Query;
@@ -57,7 +57,8 @@ public interface WaybillService {
      * @param packageList  货物信息
      * @return 面单唯一码列表
      */
+    @FormUrlEncoded
     @POST("api/v1/split")
     Call<List<String>> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
-                                    @Field("package_count") Integer packageCount, @Field("remark") String remark, @Body List<Package> packageList);
+                                    @Field("package_count") Integer packageCount, @Field("remark") String remark, @Field("package_list") List<Package> packageList);
 }

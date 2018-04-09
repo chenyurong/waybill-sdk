@@ -1,10 +1,7 @@
 package com.tmindtech.api.waybill.sdk.util;
 
-import com.sun.image.codec.jpeg.JPEGCodec;
-import com.sun.image.codec.jpeg.JPEGEncodeParam;
-import com.sun.image.codec.jpeg.JPEGImageEncoder;
 import java.awt.Graphics2D;
-import java.awt.Image;
+import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
@@ -15,12 +12,17 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Iterator;
 import java.util.Objects;
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
+import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.metadata.IIOInvalidTreeException;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
-import javax.imageio.stream.MemoryCacheImageInputStream;
+import javax.imageio.stream.ImageOutputStream;
 import javax.print.PrintService;
 import javax.print.attribute.standard.PrinterResolution;
 import org.w3c.dom.NamedNodeMap;
@@ -80,17 +82,7 @@ public class ImageStreamUtil {
                 Node item = nnm.item(0);
                 feedResolution = Math.round(INCH_2_MM / Float.parseFloat(item.getNodeValue()));
             }
-
-            /*
-            // 可以用ImageInfo直接拿图片的宽和高以及DPI，但是需要引入sanselan包
-            // 另外ImageInfo支持的图片类型有限，所有用上面的方法获取DPI
-            ImageInfo imageInfo = Sanselan.getImageInfo(cacher.getInputStream(), null);
-            int width = imageInfo.getWidth();
-            int height = imageInfo.getHeight();
-            int crossResolution = imageInfo.getPhysicalWidthDpi();
-            int feedResolution = imageInfo.getPhysicalHeightDpi();
-             */
-
+            
             int xdpi = resolution.getCrossFeedResolution(PrinterResolution.DPI);
             int ydpi = resolution.getFeedResolution(PrinterResolution.DPI);
             int convertWidth = Math.round((float) width * xdpi / crossResolution);
@@ -101,7 +93,7 @@ public class ImageStreamUtil {
             BufferedOutputStream bufferStream = new BufferedOutputStream(bos);
             ImageIO.write(bufferedImage, "png", bufferStream);
             bufferStream.close();
-            return setImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, xdpi, ydpi);
+            return resetImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, xdpi, ydpi);
         } catch (IOException ex) {
             ex.printStackTrace();
         }
@@ -110,48 +102,79 @@ public class ImageStreamUtil {
 
 
     /**
-     * 设置图片的DPI
+     * 重置图片的dpi
      *
      * @param inputStream 图片输入流
-     * @param width       width
-     * @param height      height
-     * @param crossDpi    水平DPI
-     * @param feedDpi     垂直DPI
-     * @return 返回重新设置DPI后的图片流
+     * @param crossDpi    水平dpi
+     * @param feedDpi     垂直dpi
+     * @return 重置后的图片流
      */
-    private static InputStream setImageDpi(InputStream inputStream, int width, int height, int crossDpi, int feedDpi) {
-        try {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            ImageReader reader = ImageIO.getImageReadersByFormatName("png").next();
-            reader.setInput(new MemoryCacheImageInputStream(inputStream), true, false);
-            BufferedImage image = reader.read(0);
-
-            Image rescaled = image.getScaledInstance(width, height, Image.SCALE_AREA_AVERAGING);
-            BufferedImage output = toBufferedImage(rescaled, BufferedImage.TYPE_INT_RGB);
-            JPEGImageEncoder jpegEncoder = JPEGCodec.createJPEGEncoder(outputStream);
-            JPEGEncodeParam jpegEncodeParam = jpegEncoder.getDefaultJPEGEncodeParam(output);
-            jpegEncodeParam.setDensityUnit(JPEGEncodeParam.DENSITY_UNIT_DOTS_INCH);
-            jpegEncodeParam.setQuality(1.0f, true);
-            jpegEncodeParam.setXDensity(crossDpi);
-            jpegEncodeParam.setYDensity(feedDpi);
-
-            jpegEncoder.encode(output, jpegEncodeParam);
-            outputStream.flush();
-            return new ByteArrayInputStream(outputStream.toByteArray());
-        } catch (Exception ex) {
-            ex.printStackTrace();
+    private static InputStream resetImageDpi(InputStream inputStream, int width, int height, int crossDpi, int feedDpi) {
+        BufferedImage image = scaleImage(width, height, inputStream);
+        for (Iterator<ImageWriter> iw = ImageIO.getImageWritersByFormatName("png"); iw.hasNext(); ) {
+            ImageWriter writer = iw.next();
+            ImageWriteParam writeParam = writer.getDefaultWriteParam();
+            ImageTypeSpecifier typeSpecifier = ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_RGB);
+            IIOMetadata metadata = writer.getDefaultImageMetadata(typeSpecifier, writeParam);
+            if (metadata.isReadOnly() || !metadata.isStandardMetadataFormatSupported()) {
+                continue;
+            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            ImageOutputStream stream = null;
+            try {
+                setDPI(metadata, crossDpi, feedDpi);
+                stream = ImageIO.createImageOutputStream(output);
+                writer.setOutput(stream);
+                writer.write(metadata, new IIOImage(image, null, metadata), writeParam);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            } finally {
+                try {
+                    if (stream != null) {
+                        stream.close();
+                    }
+                } catch (IOException ignore) {
+                }
+            }
+            return new ByteArrayInputStream(output.toByteArray());
         }
         return null;
     }
 
-    private static BufferedImage toBufferedImage(Image image, int type) {
-        int w = image.getWidth(null);
-        int h = image.getHeight(null);
-        BufferedImage result = new BufferedImage(w, h, type);
-        Graphics2D g = result.createGraphics();
-        g.drawImage(image, 0, 0, null);
-        g.dispose();
-        return result;
+    private static BufferedImage scaleImage(int width, int height, InputStream inputStream) {
+        BufferedImage bi = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = bi.createGraphics();
+        g2d.addRenderingHints(new RenderingHints(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY));
+        try {
+            g2d.drawImage(ImageIO.read(inputStream), 0, 0, width, height, null);
+        } catch (IOException ignore) {
+        }
+        return bi;
+    }
+
+    private static void setDPI(IIOMetadata metadata, int crossDpi, int feedDpi) {
+
+        // for PMG, it's dots per millimeter
+        double crossDotsPerMilli = 1.0 * crossDpi / INCH_2_MM;
+        double feedDotsPerMilli = 1.0 * feedDpi / INCH_2_MM;
+        IIOMetadataNode horiz = new IIOMetadataNode("HorizontalPixelSize");
+        horiz.setAttribute("value", Double.toString(crossDotsPerMilli));
+
+        IIOMetadataNode vert = new IIOMetadataNode("VerticalPixelSize");
+        vert.setAttribute("value", Double.toString(feedDotsPerMilli));
+
+        IIOMetadataNode dim = new IIOMetadataNode("Dimension");
+        dim.appendChild(horiz);
+        dim.appendChild(vert);
+
+        IIOMetadataNode root = new IIOMetadataNode("javax_imageio_1.0");
+        root.appendChild(dim);
+
+        try {
+            metadata.mergeTree("javax_imageio_1.0", root);
+        } catch (IIOInvalidTreeException ex) {
+            ex.printStackTrace();
+        }
     }
 
     /**
