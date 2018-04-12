@@ -1,6 +1,8 @@
 package com.tmindtech.api.waybill.sdk;
 
+import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
+import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
 import java.util.List;
@@ -44,8 +46,8 @@ public interface WaybillService {
      * @param saleOrder 批次号
      * @return 面单唯一码列表
      */
-    @GET("api/v1/sale_order")
-    Call<List<String>> getLabelInfo(@Query("sale_order") String saleOrder);
+    @GET("api/logistics_label_address/find_by_sale_order")
+    Call<Data> getLabelInfo(@Query("sale_order") String saleOrder);
 
     /**
      * 根据批次号重新下单获取面单唯一码列表
@@ -58,7 +60,10 @@ public interface WaybillService {
      * @return 面单唯一码列表
      */
     @FormUrlEncoded
-    @POST("api/v1/split")
-    Call<List<String>> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
-                                    @Field("package_count") Integer packageCount, @Field("remark") String remark, @Field("package_list") List<Package> packageList);
+    @POST("api/logistics_label_address/find_by_sale_order_split")
+    Call<Data> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
+                            @Field("package_count") Integer packageCount, @Field("remark") String remark, @Field("package_list") List<Package> packageList);
+
+    @GET("api/logistics_label_address/find_by_uuid")
+    Call<LabelInfo> findPictureByPath(@Query("uuid") String uuid);
 }

@@ -1,15 +1,15 @@
 package com.tmindtech.api.waybill.sdk;
 
-import com.tmindtech.api.waybill.sdk.interceptor.HotSwitchInterceptor;
+import com.google.gson.FieldNamingPolicy;
+import com.google.gson.GsonBuilder;
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
+import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -59,8 +59,7 @@ public class WaybillSDK {
     private static final Logger log;
     private String accessKey;
     private String accessSecret;
-    private List<URL> localServerAddressList;
-    private URL cloudServerAddress;
+    private String serverAddress;
     private PrintService printService;
     private PrintListener listener;
 
@@ -72,35 +71,18 @@ public class WaybillSDK {
     /**
      * SDK 初始化时传入必要的参数(由调用者传入)
      *
-     * @param accessKey              接口签名用Key, 向SDK提供方获取
-     * @param accessSecret           接口签名用Secret, 向SDK提供方获取
-     * @param cloudServerAddress     云端面单服务器地址
-     * @param localServerAddressList 本地面单服务器地址列表
+     * @param accessKey     接口签名用Key, 向SDK提供方获取
+     * @param accessSecret  接口签名用Secret, 向SDK提供方获取
+     * @param serverAddress 面单服务器地址
      * @return 初始化结果
      */
-    public boolean init(String accessKey, String accessSecret,
-                        String cloudServerAddress, List<String> localServerAddressList) {
-        if (this.accessKey != null && this.accessSecret != null && this.cloudServerAddress != null) {
+    public boolean init(String accessKey, String accessSecret, String serverAddress) {
+        if (accessKey == null || accessSecret == null || serverAddress == null) {
             return false;
         }
         this.accessKey = accessKey;
         this.accessSecret = accessSecret;
-        try {
-            this.cloudServerAddress = new URL(cloudServerAddress);
-        } catch (MalformedURLException ex) {
-            ex.printStackTrace();
-            return false;
-        }
-        List<URL> localServerAddresses = new ArrayList<>();
-        for (String localServerAddress : localServerAddressList) {
-            try {
-                localServerAddresses.add(new URL(localServerAddress));
-            } catch (MalformedURLException ex) {
-                ex.printStackTrace();
-                return false;
-            }
-        }
-        this.localServerAddressList = localServerAddresses;
+        this.serverAddress = serverAddress;
         this.printService = PrintServiceLookup.lookupDefaultPrintService();
         return true;
     }
@@ -112,7 +94,7 @@ public class WaybillSDK {
      */
     public List<String> getPrinterList() {
         List<String> list = new ArrayList<>();
-        DocFlavor dof = DocFlavor.INPUT_STREAM.JPEG;
+        DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
         PrintService[] printServices = PrintServiceLookup.lookupPrintServices(dof, null);
         if (printServices.length != 0) {
             Arrays.asList(printServices).forEach(item -> list.add(item.getName()));
@@ -179,13 +161,19 @@ public class WaybillSDK {
      */
     public List<LabelInfo> getLabelInfo(String saleOrder) {
         List<LabelInfo> labelInfos = new ArrayList<>();
-        List<String> uris = null;
         try {
-            uris = getWaybillService().getLabelInfo(saleOrder).execute().body();
+            Data data = getWaybillService().getLabelInfo(saleOrder).execute().body();
+            if (data != null) {
+                if (data.data.isEmpty()) {
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
+                    return labelInfos;
+                }
+                labelInfos = data.data;
+            }
         } catch (IOException ex) {
-            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
+            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
         }
-        return generateLabelInfo(labelInfos, uris, saleOrder);
+        return labelInfos;
     }
 
     /**
@@ -197,13 +185,17 @@ public class WaybillSDK {
     public InputStream getLabelImageByUniqueCode(String uniqueCode) {
         try {
             Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-            if (Objects.nonNull(response) && response.isSuccessful()) {
+            if (response.isSuccessful()) {  //301
                 return response.body().byteStream();
-            } else {
+            } else if (response.code() == 404) { //404
+                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_READY, "label not exist");
+            } else if (response.code() == 102) {
                 listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_READY, "label not ready");
+            } else {
+                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
             }
         } catch (IOException ex) {
-            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_EXIST, "label not exist");
+            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
         }
         return null;
     }
@@ -220,29 +212,16 @@ public class WaybillSDK {
      */
     public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Integer packageCount, List<Package> packageList, String remark) {
         List<LabelInfo> labelInfos = new ArrayList<>();
-        List<String> uris = null;
         try {
-            uris = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, remark, packageList).execute().body();
-        } catch (IOException ex) {
-            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
-        }
-        return generateLabelInfo(labelInfos, uris, saleOrder);
-    }
-
-    private List<LabelInfo> generateLabelInfo(List<LabelInfo> labelInfos, List<String> uris, String saleOrder) {
-        if (Objects.nonNull(uris)) {
-            for (int i = 0; i < uris.size(); i++) {
-                LabelInfo info = new LabelInfo(i, uris.size(), saleOrder, uris.get(i));
-                try {
-                    Boolean isReady = getPictureService().getOrderPictureByPath(uris.get(i)).execute().isSuccessful() ? Boolean.TRUE : Boolean.FALSE;
-                    info.setIsReady(isReady);
-                    labelInfos.add(info);
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-                    info.setIsReady(Boolean.FALSE);
-                    labelInfos.add(info);
+            Data data = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, remark, packageList).execute().body();
+            if (data != null) {
+                if (data.data.isEmpty()) {
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
                 }
+                labelInfos = data.data;
             }
+        } catch (IOException ex) {
+            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
         }
         return labelInfos;
     }
@@ -259,31 +238,76 @@ public class WaybillSDK {
         if (Objects.isNull(currPrinter)) {
             return;
         }
-        ExecutorService executorService = Executors.newFixedThreadPool(1);
-        executorService.execute(() -> {
-            for (int i = 0; i < uniqueCodeList.size(); i++) {
+        ExecutorService executorService = Executors.newFixedThreadPool(4);
+        executorService.execute(() -> syncPrintLabelByUniqueCode(uniqueCodeList, currPrinter));
+        executorService.shutdown();
+    }
+
+    private void syncPrintLabelByUniqueCode(List<String> uniqueCodeList, PrintService currPrinter) {
+        for (String uniqueCode : uniqueCodeList) {
+            AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
+            while (!serverAvailable.get()) {
+                LabelInfo info = null;
+                Response<LabelInfo> findResponse;
                 try {
-                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
+                    findResponse = getWaybillService().findPictureByPath(uniqueCode).execute();
+                    if (findResponse.isSuccessful()) {
+                        info = findResponse.body();
+                    }
+                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
                     if (response.isSuccessful()) {
                         InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream(), currPrinter);
                         PrintResult printResult = printWaybill(currPrinter, inputStream);
-                        LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
-                        labelInfo.setIsReady(Boolean.TRUE);
-                        listener.onUniqueCodePrint(uniqueCodeList.get(i), printResult.isSuccess, labelInfo, printResult.code, printResult.result);
+                        listener.onUniqueCodePrint(uniqueCode, printResult.isSuccess, info, printResult.code, printResult.result);
+                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                    } else if (response.code() == 404) {
+                        listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
+                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                    } else if (response.code() == 102) {
+                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
+                        final CountDownLatch countDownLatch = new CountDownLatch(1);
+                        final Map<String, Future> futures = new HashMap<>();
+                        final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
+                        Future future = executor.scheduleWithFixedDelay(() -> {
+                            if (flag.get() && futures.get("unique_code") != null) {
+                                futures.get("unique_code").cancel(true);
+                                countDownLatch.countDown();
+                            }
+                            try {
+                                Response<ResponseBody> newResponse = getPictureService().getOrderPictureByPath(uniqueCode).execute();
+                                if (newResponse.isSuccessful()) {
+                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uniqueCode).execute().body();
+                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(newResponse.body().byteStream(), currPrinter);
+                                    PrintResult printResult = printWaybill(currPrinter, inputStream);
+                                    listener.onUniqueCodePrint(uniqueCode, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
+                                    flag.set(Boolean.TRUE);
+                                }
+                            } catch (IOException ex) {
+                                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+                                flag.set(Boolean.TRUE);
+                            }
+                        }, 0, 2, TimeUnit.SECONDS);
+                        futures.put("unique_code", future);
+                        try {
+                            countDownLatch.await();
+                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                        } catch (InterruptedException ex) {
+                            log.info("countDownLatch await failure");
+                            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
+                        }
+                        executor.shutdown();
                     } else {
-                        LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
-                        labelInfo.setIsReady(Boolean.FALSE);
-                        listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, Constants.LABEL_NOT_EXIST, "label not exist");
+                        listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
                     }
                 } catch (IOException ex) {
-                    ex.printStackTrace();
-                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), null, uniqueCodeList.get(i));
-                    labelInfo.setIsReady(Boolean.FALSE);
-                    listener.onUniqueCodePrint(uniqueCodeList.get(i), false, labelInfo, Constants.NETWORK_ERROR, "server unreachable");
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException ignore) {
+                    }
+                    listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
                 }
             }
-        });
-        executorService.shutdown();
+        }
     }
 
     /**
@@ -298,87 +322,97 @@ public class WaybillSDK {
         if (Objects.isNull(currPrinter)) {
             return;
         }
-        ExecutorService executorService = Executors.newFixedThreadPool(1);
+        ExecutorService executorService = Executors.newFixedThreadPool(4);
         executorService.execute(() -> {
             for (String saleOrder : saleOrderList) {
-                try {
-                    Response<List<String>> response = getWaybillService().getLabelInfo(saleOrder).execute();
-                    if (response.isSuccessful()) {  //200
-                        List<String> uniqueCodeList = response.body();
-                        if (uniqueCodeList != null && uniqueCodeList.size() != 0) {
-                            printWaybillByStream(currPrinter, uniqueCodeList, saleOrder);
-                        }
-                    } else {
-                        if (response.code() == 404) {  //404
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
-                        } else if (response.code() == 102) {  //102
-                            ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
-                            final CountDownLatch countDownLatch = new CountDownLatch(1);
-                            final Map<String, Future> futures = new HashMap<>();
-                            final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
-                            Future future = executor.scheduleWithFixedDelay(() -> {
-                                if (flag.get() && futures.get("sale_order") != null) {
-                                    futures.get("sale_order").cancel(true);
-                                    countDownLatch.countDown();
-                                }
-                                try {
-                                    Response<List<String>> newResponse = getWaybillService().getLabelInfo(saleOrder).execute();
-                                    if (newResponse.isSuccessful()) {
-                                        List<String> uniqueCodeList = newResponse.body();
-                                        if (uniqueCodeList != null && uniqueCodeList.size() != 0) {
-                                            printWaybillByStream(currPrinter, uniqueCodeList, saleOrder);
-                                        } else {
-                                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.UNICODE_NOT_EXIST, "unique not exist");
-                                        }
-                                        flag.set(Boolean.TRUE);
-                                    }
-                                } catch (IOException ex) {
-                                    ex.printStackTrace();
-                                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
-                                    flag.set(Boolean.TRUE);
-                                }
-                            }, 0, 2, TimeUnit.SECONDS);
-                            futures.put("sale_order", future);
-                            try {
-                                countDownLatch.await();
-                            } catch (InterruptedException ex) {
-                                log.info("countDownLatch await failure");
-                                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.UNKNOWN, "unknown error");
-                            }
-                            executor.shutdown();
-                        } else {  //500
+                AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
+                while (!serverAvailable.get()) {
+                    try {
+                        Response<Data> response = getWaybillService().getLabelInfo(saleOrder).execute();
+                        if (response.isSuccessful()) {  //200
+                            List<String> uniqueCodeList = new ArrayList<>();
+                            response.body().data.forEach(labelInfo -> uniqueCodeList.add(labelInfo.uniqueCode));
+                            syncPrintLabelByUniqueCodeAndOrder(uniqueCodeList, currPrinter, saleOrder);
+                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                        } else {
                             listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                         }
+                    } catch (IOException ex) {
+                        try {
+                            Thread.sleep(5000);
+                        } catch (InterruptedException ignore) {
+                        }
+                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                     }
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
                 }
             }
         });
         executorService.shutdown();
     }
 
-    private void printWaybillByStream(PrintService printService, List<String> uniqueCodeList, String saleOrder) {
-        for (int i = 0; i < uniqueCodeList.size(); i++) {
-            try {
-                Response<ResponseBody> pictureResponse = getPictureService().getOrderPictureByPath(uniqueCodeList.get(i)).execute();
-                if (pictureResponse.isSuccessful()) {
-                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(pictureResponse.body().byteStream(), printService);
-                    PrintResult result = printWaybill(printService, inputStream);
-                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
-                    labelInfo.setIsReady(Boolean.TRUE);
-                    listener.onSaleOrderPrint(saleOrder, result.isSuccess, labelInfo, result.code, result.result);
-                } else {
-                    LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
-                    labelInfo.setIsReady(Boolean.FALSE);
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, Constants.UNICODE_NOT_EXIST, "unique code not exist");
+    private void syncPrintLabelByUniqueCodeAndOrder(List<String> uniqueCodeList, PrintService currPrinter, String saleOrder) {
+        for (String uniqueCode : uniqueCodeList) {
+            AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
+            while (!serverAvailable.get()) {
+                LabelInfo info = null;
+                Response<LabelInfo> findResponse;
+                try {
+                    findResponse = getWaybillService().findPictureByPath(uniqueCode).execute();
+                    if (findResponse.isSuccessful()) {
+                        info = findResponse.body();
+                    }
+                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
+                    if (response.isSuccessful()) {
+                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream(), currPrinter);
+                        PrintResult printResult = printWaybill(currPrinter, inputStream);
+                        listener.onSaleOrderPrint(saleOrder, printResult.isSuccess, info, printResult.code, printResult.result);
+                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                    } else if (response.code() == 404) {
+                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
+                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                    } else if (response.code() == 102) {
+                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(4);
+                        final CountDownLatch countDownLatch = new CountDownLatch(1);
+                        final Map<String, Future> futures = new HashMap<>();
+                        final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
+                        Future future = executor.scheduleWithFixedDelay(() -> {
+                            if (flag.get() && futures.get("unique_code") != null) {
+                                futures.get("unique_code").cancel(true);
+                                countDownLatch.countDown();
+                            }
+                            try {
+                                Response<ResponseBody> newResponse = getPictureService().getOrderPictureByPath(uniqueCode).execute();
+                                if (newResponse.isSuccessful()) {
+                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uniqueCode).execute().body();
+                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(newResponse.body().byteStream(), currPrinter);
+                                    PrintResult printResult = printWaybill(currPrinter, inputStream);
+                                    listener.onSaleOrderPrint(saleOrder, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
+                                    flag.set(Boolean.TRUE);
+                                }
+                            } catch (IOException ex) {
+                                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+                                flag.set(Boolean.TRUE);
+                            }
+                        }, 0, 2, TimeUnit.SECONDS);
+                        futures.put("unique_code", future);
+                        try {
+                            countDownLatch.await();
+                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                        } catch (InterruptedException ex) {
+                            log.info("countDownLatch await failure");
+                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
+                        }
+                        executor.shutdown();
+                    } else {
+                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
+                    }
+                } catch (IOException ex) {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException ignore) {
+                    }
+                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
                 }
-            } catch (IOException ex) {
-                ex.printStackTrace();
-                LabelInfo labelInfo = new LabelInfo(i, uniqueCodeList.size(), saleOrder, uniqueCodeList.get(i));
-                labelInfo.setIsReady(Boolean.FALSE);
-                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, labelInfo, Constants.NETWORK_ERROR, "server unreachable");
             }
         }
     }
@@ -413,38 +447,37 @@ public class WaybillSDK {
     }
 
     @Getter(lazy = true)
-    private final WaybillService waybillService = buildWaybillService(cloudServerAddress, localServerAddressList);
+    private final WaybillService waybillService = buildWaybillService(serverAddress);
 
-    private WaybillService buildWaybillService(URL cloudServerAddress, List<URL> localServerAddressList) {
+    private WaybillService buildWaybillService(String serverAddress) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
-                .addInterceptor(new HotSwitchInterceptor(localServerAddressList))
                 .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(cloudServerAddress.toString())
-                .addConverterFactory(GsonConverterFactory.create())
+                .baseUrl(serverAddress)
+                .addConverterFactory(GsonConverterFactory.create(new GsonBuilder().setFieldNamingStrategy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()))
                 .client(okHttpClient)
                 .build()
                 .create(WaybillService.class);
     }
 
     @Getter(lazy = true)
-    private final PictureService pictureService = buildPictureService(cloudServerAddress, localServerAddressList);
+    private final PictureService pictureService = buildPictureService(serverAddress);
 
-    private PictureService buildPictureService(URL cloudServerAddress, List<URL> localServerAddressList) {
+    private PictureService buildPictureService(String serverAddress) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
-                .addInterceptor(new HotSwitchInterceptor(localServerAddressList))
+                .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
                 .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(cloudServerAddress.toString())
+                .baseUrl(serverAddress)
                 .client(okHttpClient)
                 .build()
                 .create(PictureService.class);
