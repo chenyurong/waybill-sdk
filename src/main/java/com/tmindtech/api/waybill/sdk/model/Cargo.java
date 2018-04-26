@@ -4,5 +4,5 @@ public class Cargo {
     
     public String skuId; // 商品skuId
 
-    public Integer count; // 数量
+    public Number count; // 数量
 }

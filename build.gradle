@@ -38,6 +38,10 @@ dependencies {
 }
 
 jar {
+    manifest {
+        attributes 'Implementation-Version': version,
+                   'Main-Class': 'com.tmindtech.api.waybill.sdk.WaybillSDKApplication'
+    }
     from {
         configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
     }

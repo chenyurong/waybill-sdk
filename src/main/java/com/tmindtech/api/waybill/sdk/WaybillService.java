@@ -2,7 +2,7 @@ package com.tmindtech.api.waybill.sdk;
 
 import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
-import com.tmindtech.api.waybill.sdk.model.LabelInfo;
+import com.tmindtech.api.waybill.sdk.model.LabelData;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
 import java.util.List;
@@ -55,15 +55,14 @@ public interface WaybillService {
      * @param saleOrder    批次号
      * @param carrierCode  承运商编码
      * @param packageCount 包裹数量
-     * @param remark       备注
      * @param packageList  货物信息
      * @return 面单唯一码列表
      */
     @FormUrlEncoded
     @POST("api/logistics_label_address/find_by_sale_order_split")
     Call<Data> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
-                            @Field("package_count") Integer packageCount, @Field("remark") String remark, @Field("package_list") List<Package> packageList);
+                            @Field("package_count") Number packageCount, @Field("package_list") List<Package> packageList);
 
     @GET("api/logistics_label_address/find_by_uuid")
-    Call<LabelInfo> findPictureByPath(@Query("uuid") String uuid);
+    Call<LabelData> findPictureByPath(@Query("uuid") String uuid);
 }

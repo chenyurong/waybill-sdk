@@ -4,10 +4,13 @@ import com.google.gson.FieldNamingPolicy;
 import com.google.gson.GsonBuilder;
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
 import com.tmindtech.api.waybill.sdk.model.Data;
+import com.tmindtech.api.waybill.sdk.model.ImageData;
+import com.tmindtech.api.waybill.sdk.model.LabelData;
 import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -41,11 +44,7 @@ import javax.print.event.PrintJobAdapter;
 import javax.print.event.PrintJobEvent;
 import lombok.Getter;
 import okhttp3.OkHttpClient;
-import okhttp3.ResponseBody;
 import okhttp3.logging.HttpLoggingInterceptor;
-import org.apache.log4j.BasicConfigurator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
@@ -56,17 +55,18 @@ import retrofit2.converter.gson.GsonConverterFactory;
  * 所有的一切都要在 SDK 内自动完成, 不需要外部干预
  */
 public class WaybillSDK {
-    private static final Logger log;
+    //private static final Logger log;
     private String accessKey;
     private String accessSecret;
     private String serverAddress;
     private PrintService printService;
     private PrintListener listener;
+    public ExecutorService executorService = Executors.newFixedThreadPool(1);
 
-    static {
-        BasicConfigurator.configure();
-        log = LoggerFactory.getLogger(WaybillSDK.class);
-    }
+//    static {
+//        BasicConfigurator.configure();
+//        log = LoggerFactory.getLogger(WaybillSDK.class);
+//    }
 
     /**
      * SDK 初始化时传入必要的参数(由调用者传入)
@@ -123,22 +123,16 @@ public class WaybillSDK {
     /**
      * 通过打印机名称获取指定名称
      *
-     * @param name  指定打印机名称
-     * @param index 唯一码和订单打印标识，0是唯一码打印，1是订单打印
+     * @param name 指定打印机名称
      * @return 目标打印机名称
      */
-    public PrintService getPrinterByName(String name, int index) {
+    public PrintService getPrinterByName(String name) {
         DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
         HashAttributeSet hs = new HashAttributeSet();
         hs.add(new PrinterName(name, null));
         PrintService[] printServices = PrintServiceLookup.lookupPrintServices(dof, hs);
         if (printServices.length == 0) {
-            if (index == 0) {
-                listener.onUniqueCodePrint(null, Boolean.FALSE, null, Constants.PRINTER_NOT_SUPPORT, "printer is not support");
-            } else {
-                listener.onSaleOrderPrint(null, Boolean.FALSE, null, Constants.PRINTER_NOT_SUPPORT, "printer is not support");
-            }
-            return null;
+            throw new RuntimeException("PrinterNotSupport");
         } else {
             return printServices[0];
         }
@@ -165,13 +159,12 @@ public class WaybillSDK {
             Data data = getWaybillService().getLabelInfo(saleOrder).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
-                    return labelInfos;
+                    throw new RuntimeException("SaleOrderNotExist");
                 }
                 labelInfos = data.data;
             }
         } catch (IOException ex) {
-            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+            throw new RuntimeException("当前服务不可用");
         }
         return labelInfos;
     }
@@ -179,25 +172,28 @@ public class WaybillSDK {
     /**
      * 通过唯一码获取面单图片
      *
-     * @param uniqueCode 面单唯一码
+     * @param uuidCode 面单唯一码
      * @return 面单图片字节流
      */
-    public InputStream getLabelImageByUniqueCode(String uniqueCode) {
+    public InputStream getLabelImageByUuidCode(String uuidCode) {
         try {
-            Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-            if (response.isSuccessful()) {  //301
-                return response.body().byteStream();
-            } else if (response.code() == 404) { //404
-                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_READY, "label not exist");
-            } else if (response.code() == 102) {
-                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.LABEL_NOT_READY, "label not ready");
+            ImageData imageData = getPictureService().getOrderPictureByPath(uuidCode).execute().body();
+            if (imageData == null) {
+                throw new RuntimeException("当前服务不可用");
+            }
+            if (imageData.code == 200) { //200
+                // todo 通过图片地址获取图片流
+                return new FileInputStream(imageData.data);
+            } else if (imageData.code == 404) { //404
+                throw new RuntimeException("LabelNotExist");
+            } else if (imageData.code == 102) {
+                throw new RuntimeException("LabelNotReady");
             } else {
-                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+                throw new RuntimeException("当前服务不可用");
             }
         } catch (IOException ex) {
-            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+            throw new RuntimeException("当前服务不可用");
         }
-        return null;
     }
 
     /**
@@ -207,21 +203,20 @@ public class WaybillSDK {
      * @param carrierCode  承运商编码，使用快递100的编码
      * @param packageCount 包裹数
      * @param packageList  货物信息
-     * @param remark       运单备注（不超过20字）
      * @return 面单信息列表，兼容多包裹
      */
-    public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Integer packageCount, List<Package> packageList, String remark) {
+    public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Number packageCount, List<Package> packageList) {
         List<LabelInfo> labelInfos = new ArrayList<>();
         try {
-            Data data = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, remark, packageList).execute().body();
+            Data data = getWaybillService().splitPackage(saleOrder, carrierCode, packageCount, packageList).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.SALEORDER_NOT_EXIST, "sale order not exist");
+                    throw new RuntimeException("saleOrderNotExist");
                 }
                 labelInfos = data.data;
             }
         } catch (IOException ex) {
-            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
+            throw new RuntimeException("当前服务不可用");
         }
         return labelInfos;
     }
@@ -229,192 +224,101 @@ public class WaybillSDK {
     /**
      * 通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单. 打印结果以异步回调方式进行通知
      *
-     * @param uniqueCodeList 唯一码列表
-     * @param printer        指定打印机（为null时，默认使用当前打印机）
+     * @param uuidCodeList 唯一码列表
+     * @param printer      指定打印机（为null时，默认使用当前打印机）
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void printLabelByUniqueCode(List<String> uniqueCodeList, String printer) {
-        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer, 0);
+    public void printLabelByUuidCode(List<String> uuidCodeList, String printer) {
+        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
         if (Objects.isNull(currPrinter)) {
             return;
         }
-        ExecutorService executorService = Executors.newFixedThreadPool(4);
-        executorService.execute(() -> syncPrintLabelByUniqueCode(uniqueCodeList, currPrinter));
-        executorService.shutdown();
+        executorService.execute(() -> syncPrintLabelByUuidCode(uuidCodeList, currPrinter));
     }
 
-    private void syncPrintLabelByUniqueCode(List<String> uniqueCodeList, PrintService currPrinter) {
-        for (String uniqueCode : uniqueCodeList) {
+    private void syncPrintLabelByUuidCode(List<String> uuidCodeList, PrintService currPrinter) {
+        for (String uuidCode : uuidCodeList) {
             AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
             while (!serverAvailable.get()) {
                 LabelInfo info = null;
-                Response<LabelInfo> findResponse;
+                Response<LabelData> findResponse;
                 try {
-                    findResponse = getWaybillService().findPictureByPath(uniqueCode).execute();
+                    findResponse = getWaybillService().findPictureByPath(uuidCode).execute();
                     if (findResponse.isSuccessful()) {
-                        info = findResponse.body();
+                        info = findResponse.body().data;
                     }
-                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-                    if (response.isSuccessful()) {
-                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream(), currPrinter);
+                    Response<ImageData> response = getPictureService().getOrderPictureByPath(uuidCode).execute();
+                    if (response.body().code == 200) {
+                        // todo 通过data图片地址获取图片流
+                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(new FileInputStream(response.body().data), currPrinter);
                         PrintResult printResult = printWaybill(currPrinter, inputStream);
-                        listener.onUniqueCodePrint(uniqueCode, printResult.isSuccess, info, printResult.code, printResult.result);
+                        listener.onPrint(uuidCode, printResult.isSuccess, info, printResult.code, printResult.result);
                         serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                    } else if (response.code() == 404) {
-                        listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
+                    } else if (response.body().code == 404) {
+                        listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
                         serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                    } else if (response.code() == 102) {
-                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
+                    } else if (response.body().code == 102) {
+                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
                         final CountDownLatch countDownLatch = new CountDownLatch(1);
                         final Map<String, Future> futures = new HashMap<>();
                         final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
                         Future future = executor.scheduleWithFixedDelay(() -> {
-                            if (flag.get() && futures.get("unique_code") != null) {
-                                futures.get("unique_code").cancel(true);
+                            if (flag.get() && futures.get("uuid_code") != null) {
+                                futures.get("uuid_code").cancel(true);
                                 countDownLatch.countDown();
                             }
                             try {
-                                Response<ResponseBody> newResponse = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-                                if (newResponse.isSuccessful()) {
-                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uniqueCode).execute().body();
-                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(newResponse.body().byteStream(), currPrinter);
+                                Response<ImageData> newResponse = getPictureService().getOrderPictureByPath(uuidCode).execute();
+                                if (newResponse.body().code == 200) {
+                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uuidCode).execute().body().data;
+                                    // todo 通过data图片地址获取图片流
+                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(new FileInputStream(newResponse.body().data), currPrinter);
                                     PrintResult printResult = printWaybill(currPrinter, inputStream);
-                                    listener.onUniqueCodePrint(uniqueCode, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
+                                    listener.onPrint(uuidCode, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
                                     flag.set(Boolean.TRUE);
                                 }
-                            } catch (IOException ex) {
-                                listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
-                                flag.set(Boolean.TRUE);
+                            } catch (IOException ignore) {
                             }
                         }, 0, 2, TimeUnit.SECONDS);
-                        futures.put("unique_code", future);
+                        futures.put("uuid_code", future);
                         try {
                             countDownLatch.await();
                             serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
                         } catch (InterruptedException ex) {
-                            log.info("countDownLatch await failure");
-                            listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
+                            listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
                         }
                         executor.shutdown();
                     } else {
-                        listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
+                        listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
                     }
                 } catch (IOException ex) {
                     try {
                         Thread.sleep(5000);
                     } catch (InterruptedException ignore) {
                     }
-                    listener.onUniqueCodePrint(uniqueCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
+                    listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
                 }
             }
         }
     }
 
     /**
-     * 通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
+     * 通过批次号分包并请求打印面单，打印结果以异步回调方式进行通知
      *
-     * @param saleOrderList 批次号列表
-     * @param printer       指定打印机（为null时，默认使用当前打印机）
+     * @param saleOrder    批次号
+     * @param carrierCode  承运商编码
+     * @param packageCount 包裹数
+     * @param packageList  货物信息
+     * @param printer      指定打印机（为null时，默认使用当前打印机）
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void printLabelBySaleOrder(List<String> saleOrderList, String printer) {
-        PrintService currPrinter = printer == null ? printService : getPrinterByName(printer, 1);
-        if (Objects.isNull(currPrinter)) {
-            return;
-        }
-        ExecutorService executorService = Executors.newFixedThreadPool(4);
+    public void splitPackageAndPrint(String saleOrder, String carrierCode, Number packageCount, List<Package> packageList, String printer) {
         executorService.execute(() -> {
-            for (String saleOrder : saleOrderList) {
-                AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-                while (!serverAvailable.get()) {
-                    try {
-                        Response<Data> response = getWaybillService().getLabelInfo(saleOrder).execute();
-                        if (response.isSuccessful()) {  //200
-                            List<String> uniqueCodeList = new ArrayList<>();
-                            response.body().data.forEach(labelInfo -> uniqueCodeList.add(labelInfo.uniqueCode));
-                            syncPrintLabelByUniqueCodeAndOrder(uniqueCodeList, currPrinter, saleOrder);
-                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                        } else {
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
-                        }
-                    } catch (IOException ex) {
-                        try {
-                            Thread.sleep(5000);
-                        } catch (InterruptedException ignore) {
-                        }
-                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
-                    }
-                }
-            }
+            List<LabelInfo> labelInfoList = splitPackage(saleOrder, carrierCode, packageCount, packageList);
+            List<String> uuidCodeList = new ArrayList<>();
+            labelInfoList.forEach(labelInfo -> uuidCodeList.add(labelInfo.uuidCode));
+            printLabelByUuidCode(uuidCodeList, printer);
         });
-        executorService.shutdown();
-    }
-
-    private void syncPrintLabelByUniqueCodeAndOrder(List<String> uniqueCodeList, PrintService currPrinter, String saleOrder) {
-        for (String uniqueCode : uniqueCodeList) {
-            AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-            while (!serverAvailable.get()) {
-                LabelInfo info = null;
-                Response<LabelInfo> findResponse;
-                try {
-                    findResponse = getWaybillService().findPictureByPath(uniqueCode).execute();
-                    if (findResponse.isSuccessful()) {
-                        info = findResponse.body();
-                    }
-                    Response<ResponseBody> response = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-                    if (response.isSuccessful()) {
-                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(response.body().byteStream(), currPrinter);
-                        PrintResult printResult = printWaybill(currPrinter, inputStream);
-                        listener.onSaleOrderPrint(saleOrder, printResult.isSuccess, info, printResult.code, printResult.result);
-                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                    } else if (response.code() == 404) {
-                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
-                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                    } else if (response.code() == 102) {
-                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(4);
-                        final CountDownLatch countDownLatch = new CountDownLatch(1);
-                        final Map<String, Future> futures = new HashMap<>();
-                        final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
-                        Future future = executor.scheduleWithFixedDelay(() -> {
-                            if (flag.get() && futures.get("unique_code") != null) {
-                                futures.get("unique_code").cancel(true);
-                                countDownLatch.countDown();
-                            }
-                            try {
-                                Response<ResponseBody> newResponse = getPictureService().getOrderPictureByPath(uniqueCode).execute();
-                                if (newResponse.isSuccessful()) {
-                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uniqueCode).execute().body();
-                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(newResponse.body().byteStream(), currPrinter);
-                                    PrintResult printResult = printWaybill(currPrinter, inputStream);
-                                    listener.onSaleOrderPrint(saleOrder, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
-                                    flag.set(Boolean.TRUE);
-                                }
-                            } catch (IOException ex) {
-                                listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, null, Constants.NETWORK_ERROR, "server unreachable");
-                                flag.set(Boolean.TRUE);
-                            }
-                        }, 0, 2, TimeUnit.SECONDS);
-                        futures.put("unique_code", future);
-                        try {
-                            countDownLatch.await();
-                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                        } catch (InterruptedException ex) {
-                            log.info("countDownLatch await failure");
-                            listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
-                        }
-                        executor.shutdown();
-                    } else {
-                        listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
-                    }
-                } catch (IOException ex) {
-                    try {
-                        Thread.sleep(5000);
-                    } catch (InterruptedException ignore) {
-                    }
-                    listener.onSaleOrderPrint(saleOrder, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
-                }
-            }
-        }
     }
 
     private PrintResult printWaybill(PrintService printService, InputStream inputStream) {
@@ -453,7 +357,7 @@ public class WaybillSDK {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
                 .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
                 .build();
 
