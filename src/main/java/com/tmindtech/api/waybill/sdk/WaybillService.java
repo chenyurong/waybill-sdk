@@ -3,12 +3,9 @@ package com.tmindtech.api.waybill.sdk;
 import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
 import com.tmindtech.api.waybill.sdk.model.LabelData;
-import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
-import java.util.List;
 import retrofit2.Call;
 import retrofit2.http.Field;
-import retrofit2.http.FormUrlEncoded;
 import retrofit2.http.GET;
 import retrofit2.http.POST;
 import retrofit2.http.Query;
@@ -43,26 +40,21 @@ public interface WaybillService {
     /**
      * 根据批次号获取生成面单的唯一码列表
      *
-     * @param saleOrder 批次号
+     * @param yxMessage yxMessage
      * @return 面单唯一码列表
      */
-    @GET("api/logistics_label_address/find_by_sale_order")
-    Call<Data> getLabelInfo(@Query("sale_order") String saleOrder);
+    @POST
+    Call<Data> getLabelInfo(@Field("yx_message") String yxMessage);
 
     /**
      * 根据批次号重新下单获取面单唯一码列表
      *
-     * @param saleOrder    批次号
-     * @param carrierCode  承运商编码
-     * @param packageCount 包裹数量
-     * @param packageList  货物信息
+     * @param yxMessage yxMessage
      * @return 面单唯一码列表
      */
-    @FormUrlEncoded
-    @POST("api/logistics_label_address/find_by_sale_order_split")
-    Call<Data> splitPackage(@Field("sale_order") String saleOrder, @Field("carrier_code") String carrierCode,
-                            @Field("package_count") Number packageCount, @Field("package_list") List<Package> packageList);
+    @POST
+    Call<Data> splitPackage(@Field("yx_message") String yxMessage);
 
-    @GET("api/logistics_label_address/find_by_uuid")
-    Call<LabelData> findPictureByPath(@Query("uuid") String uuid);
+    @GET
+    Call<LabelData> findPictureByPath(@Field("yx_message") String yxMessage);
 }
