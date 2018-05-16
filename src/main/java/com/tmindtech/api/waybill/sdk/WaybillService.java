@@ -4,9 +4,11 @@ import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
 import com.tmindtech.api.waybill.sdk.model.LabelData;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
+import okhttp3.RequestBody;
 import retrofit2.Call;
-import retrofit2.http.Field;
+import retrofit2.http.Body;
 import retrofit2.http.GET;
+import retrofit2.http.Headers;
 import retrofit2.http.POST;
 import retrofit2.http.Query;
 
@@ -40,21 +42,24 @@ public interface WaybillService {
     /**
      * 根据批次号获取生成面单的唯一码列表
      *
-     * @param yxMessage yxMessage
+     * @param body RequestBody
      * @return 面单唯一码列表
      */
-    @POST
-    Call<Data> getLabelInfo(@Field("yx_message") String yxMessage);
+    @Headers({"Content-Type: application/json", "Accept: application/json"})
+    @POST("request")
+    Call<Data> getLabelInfo(@Body RequestBody body);
 
     /**
      * 根据批次号重新下单获取面单唯一码列表
      *
-     * @param yxMessage yxMessage
+     * @param body RequestBody
      * @return 面单唯一码列表
      */
-    @POST
-    Call<Data> splitPackage(@Field("yx_message") String yxMessage);
+    @Headers({"Content-Type: application/json", "Accept: application/json"})
+    @POST("request")
+    Call<Data> splitPackage(@Body RequestBody body);
 
-    @GET
-    Call<LabelData> findPictureByPath(@Field("yx_message") String yxMessage);
+    @Headers({"Content-Type: application/json", "Accept: application/json"})
+    @POST("request")
+    Call<LabelData> findPictureByPath(@Body RequestBody body);
 }

@@ -5,15 +5,17 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 
 public class YXMessage {
-    private Integer async;
-    private String topic;
-    private String source;
-    private String target;
-    private String timestamp;
-    private String sign;
-    private String payload;
+    public String id;
+    public Integer async;
+    public String topic;
+    public String source;
+    public String target;
+    public String timestamp;
+    public String sign;
+    public String payload;
 
-    public YXMessage(Integer async, String topic, String source, String target, String sign, String payload) {
+    public YXMessage(String id, Integer async, String topic, String source, String target, String sign, String payload) {
+        this.id = id;
         this.async = async;
         this.topic = topic;
         this.source = source;

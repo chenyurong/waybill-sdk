@@ -1,8 +1,6 @@
 package com.tmindtech.api.waybill.sdk;
 
 import com.alibaba.fastjson.JSONObject;
-import com.google.gson.FieldNamingPolicy;
-import com.google.gson.GsonBuilder;
 import com.tmindtech.api.waybill.sdk.interceptor.SignatureInterceptor;
 import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ImageData;
@@ -13,8 +11,12 @@ import com.tmindtech.api.waybill.sdk.model.Payload;
 import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import com.tmindtech.api.waybill.sdk.model.YXMessage;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -43,12 +46,10 @@ import javax.print.attribute.standard.PrinterName;
 import javax.print.event.PrintJobAdapter;
 import javax.print.event.PrintJobEvent;
 import lombok.Getter;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
+import okhttp3.RequestBody;
 import okhttp3.logging.HttpLoggingInterceptor;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
@@ -167,8 +168,9 @@ public class WaybillSDK {
     public List<LabelInfo> getLabelInfo(String saleOrder) {
         List<LabelInfo> labelInfos = new ArrayList<>();
         try {
-            YXMessage message = new YXMessage(0, LABEL_ORDER_TOPIC, SOURCE, TARGET, "sign", saleOrder);
-            Data data = getWaybillService().getLabelInfo(JSONObject.toJSONString(message)).execute().body();
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ORDER_TOPIC, SOURCE, TARGET, "", saleOrder);
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            Data data = getWaybillService().getLabelInfo(body).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
                     throw new RuntimeException("SaleOrderNotExist");
@@ -189,8 +191,9 @@ public class WaybillSDK {
      */
     public InputStream getLabelImageByUuidCode(String uuidCode) {
         try {
-            YXMessage message = new YXMessage(0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "sign", uuidCode);
-            ImageData imageData = getPictureService().getOrderPictureByPath(JSONObject.toJSONString(message)).execute().body();
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            ImageData imageData = getPictureService().getOrderPictureByPath(body).execute().body();
             if (imageData == null) {
                 throw new RuntimeException("当前服务不可用");
             }
@@ -222,8 +225,9 @@ public class WaybillSDK {
         try {
             Payload payload = new Payload(saleOrder, carrierCode, packageCount, packageList);
 
-            YXMessage message = new YXMessage(0, SPLIT_ORDER_TOPIC, SOURCE, TARGET, "sign", JSONObject.toJSONString(payload));
-            Data data = getWaybillService().splitPackage(JSONObject.toJSONString(message)).execute().body();
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, SPLIT_ORDER_TOPIC, SOURCE, TARGET, "", JSONObject.toJSONString(payload));
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            Data data = getWaybillService().splitPackage(body).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
                     throw new RuntimeException("saleOrderNotExist");
@@ -259,8 +263,9 @@ public class WaybillSDK {
                 AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
                 while (!serverAvailable.get()) {
                     try {
-                        YXMessage message = new YXMessage(0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "sign", uuidCode);
-                        Response<ImageData> response = getPictureService().getOrderPictureByPath(JSONObject.toJSONString(message)).execute();
+                        YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+                        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                        Response<ImageData> response = getPictureService().getOrderPictureByPath(body).execute();
                         if (response.body().code != 200) {
                             uuidCodeList.forEach(item -> {
                                 if (uuidCode.equals(item)) {
@@ -293,14 +298,15 @@ public class WaybillSDK {
             for (String uuidCode : uuidCodeList) {
                 AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
                 while (!serverAvailable.get()) {
-                    YXMessage message = new YXMessage(0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "sign", uuidCode);
+                    YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
                     try {
-                        Response<ImageData> response = getPictureService().getOrderPictureByPath(JSONObject.toJSONString(message)).execute();
+                        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                        Response<ImageData> response = getPictureService().getOrderPictureByPath(body).execute();
                         if (response.body().code == 200) {
                             InputStream imageStream = downloadImageStream(response.body().data);
                             InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
                             PrintResult printResult = printWaybill(currPrinter, inputStream);
-                            listener.onPrint(uuidCode, printResult.isSuccess, getLabelInfoByUuidCode(uuidCode), printResult.code, printResult.result);
+                            listener.onPrint(uuidCode, printResult.isSuccess, null, printResult.code, printResult.result);
                         } else {
                             listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode), Constants.LABEL_NOT_READY, "label not ready");
                         }
@@ -433,10 +439,11 @@ public class WaybillSDK {
         AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
         LabelInfo labelInfo = new LabelInfo();
         while (!serverAvailable.get()) {
-            YXMessage message = new YXMessage(0, LABEL_UUID_TOPIC, SOURCE, TARGET, "sign", uuidCode);
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_UUID_TOPIC, SOURCE, TARGET, "", uuidCode);
             Response<LabelData> response;
             try {
-                response = getWaybillService().findPictureByPath(JSONObject.toJSONString(message)).execute();
+                RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                response = getWaybillService().findPictureByPath(body).execute();
                 if (response.isSuccessful()) {
                     labelInfo = response.body().data;
                     serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
@@ -454,21 +461,25 @@ public class WaybillSDK {
     }
 
     private InputStream downloadImageStream(String imageUrl) {
-        CloseableHttpClient client = HttpClients.createDefault();
+        URL url;
         try {
-            RequestConfig config = RequestConfig.custom().setSocketTimeout(15000).setConnectTimeout(3000).build();
-            HttpGet httpGet = new HttpGet(imageUrl);
-            httpGet.setConfig(config);
-            return client.execute(httpGet).getEntity().getContent();
+            url = new URL(imageUrl);
+            DataInputStream dataInputStream = new DataInputStream(url.openStream());
+
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+            byte[] buffer = new byte[1024];
+            int length;
+
+            while ((length = dataInputStream.read(buffer)) > 0) {
+                output.write(buffer, 0, length);
+            }
+            dataInputStream.close();
+
+            return new ByteArrayInputStream(output.toByteArray());
         } catch (IOException ex) {
             ex.printStackTrace();
-            throw new RuntimeException("图片下载失败");
-        } finally {
-            try {
-                client.close();
-            } catch (IOException ex) {
-                ex.printStackTrace();
-            }
+            return null;
         }
     }
 
@@ -478,14 +489,14 @@ public class WaybillSDK {
     private WaybillService buildWaybillService(String serverAddress) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
-                .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(serverAddress + "/request")
-                .addConverterFactory(GsonConverterFactory.create(new GsonBuilder().setFieldNamingStrategy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()))
+                .baseUrl(serverAddress)
+                .addConverterFactory(GsonConverterFactory.create())
                 .client(okHttpClient)
                 .build()
                 .create(WaybillService.class);
@@ -497,13 +508,14 @@ public class WaybillSDK {
     private PictureService buildPictureService(String serverAddress) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
-                .connectTimeout(3, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(serverAddress + "/request")
+                .baseUrl(serverAddress)
+                .addConverterFactory(GsonConverterFactory.create())
                 .client(okHttpClient)
                 .build()
                 .create(PictureService.class);

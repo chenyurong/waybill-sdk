@@ -82,7 +82,12 @@ public class ImageStreamUtil {
                 Node item = nnm.item(0);
                 feedResolution = Math.round(INCH_2_MM / Float.parseFloat(item.getNodeValue()));
             }
-            
+
+            //如果图片的原始dpi和目标打印机的dpi相同，则不需要转换图片流
+            if (crossResolution == resolution.getCrossFeedResolution(PrinterResolution.DPI)) {
+                return cacher.getInputStream();
+            }
+
             int xdpi = resolution.getCrossFeedResolution(PrinterResolution.DPI);
             int ydpi = resolution.getFeedResolution(PrinterResolution.DPI);
             int convertWidth = Math.round((float) width * xdpi / crossResolution);
