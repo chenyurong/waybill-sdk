@@ -1,12 +1,13 @@
 package com.tmindtech.api.waybill.sdk;
 
-import java.time.format.DateTimeFormatter;
+import java.text.SimpleDateFormat;
 
 /**
  * 常量定义
  */
 public class Constants {
-    public static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    public static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    public static final String CLOUD_SERVER_ADDRESS = "http://logistics-gateway.test.you.163.com/labelservice/";
 
     public static final Number NONE = 0;
     public static final Number SUCCESS = NONE;

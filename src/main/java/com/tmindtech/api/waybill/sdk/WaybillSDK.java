@@ -8,6 +8,7 @@ import com.tmindtech.api.waybill.sdk.model.LabelData;
 import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.Payload;
+import com.tmindtech.api.waybill.sdk.model.PrintLog;
 import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import com.tmindtech.api.waybill.sdk.model.YXMessage;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
@@ -17,8 +18,10 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,8 +30,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.print.Doc;
 import javax.print.DocFlavor;
 import javax.print.DocPrintJob;
@@ -49,7 +54,9 @@ import lombok.Getter;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.RequestBody;
+import okhttp3.ResponseBody;
 import okhttp3.logging.HttpLoggingInterceptor;
+import org.apache.commons.io.IOUtils;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
@@ -67,6 +74,7 @@ public class WaybillSDK {
     private PrintService printService;
     private PrintListener listener;
     public ExecutorService executorService = Executors.newFixedThreadPool(1);
+    public ExecutorService serverExecutorService = Executors.newSingleThreadExecutor();
 
     private static final String SOURCE = "label_print";
     private static final String TARGET = "api";
@@ -74,6 +82,7 @@ public class WaybillSDK {
     private static final String LABEL_ADDRESS_TOPIC = "logistics_label_address/get_label_image_by_uuid";
     private static final String LABEL_UUID_TOPIC = "logistics_label_address/find_by_uuid";
     private static final String SPLIT_ORDER_TOPIC = "relabel";
+    private static final String LABEL_PRINT_LOG = "local_print_log";
 
 //    static {
 //        BasicConfigurator.configure();
@@ -88,7 +97,7 @@ public class WaybillSDK {
      * @param serverAddress 面单服务器地址
      * @return 初始化结果
      */
-    public boolean init(String accessKey, String accessSecret, String serverAddress) {
+    public boolean init(String accessKey, String accessSecret, String serverAddress, List<String> localAddresses) {
         if (accessKey == null || accessSecret == null || serverAddress == null) {
             return false;
         }
@@ -96,7 +105,45 @@ public class WaybillSDK {
         this.accessSecret = accessSecret;
         this.serverAddress = serverAddress;
         this.printService = PrintServiceLookup.lookupDefaultPrintService();
+
+        if (localAddresses != null && localAddresses.size() > 0) {
+            //定时获取当前最优服务器，若所有本地服务器down机，则使用云端服务器
+            getBestServerAddress(localAddresses);
+        }
+
         return true;
+    }
+
+    private void getBestServerAddress(List<String> urls) {
+        serverExecutorService.execute(() -> {
+            ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
+            executor.scheduleWithFixedDelay(() -> {
+                long responseTime = -1;
+                for (String url : urls) {
+                    try {
+                        long startTime = System.currentTimeMillis();
+                        Response<ResponseBody> response = buildBestHealthServer(url).getBestHealthServer().execute();
+                        if (response.isSuccessful()) {
+                            String content = IOUtils.toString(response.body().byteStream(), StandardCharsets.UTF_8);
+                            if ("ok".equals(content)) {
+                                long endTime = System.currentTimeMillis();
+                                if (responseTime == -1) {
+                                    responseTime = endTime - startTime;
+                                    serverAddress = url;
+                                    System.out.println("First connect time : " + responseTime + "milliseconds!");
+                                } else {
+                                    if (endTime - startTime < responseTime) {
+                                        responseTime = endTime - startTime;
+                                        serverAddress = url;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (IOException ignore) {
+                    }
+                }
+            }, 0, 20, TimeUnit.SECONDS);
+        });
     }
 
     /**
@@ -193,7 +240,7 @@ public class WaybillSDK {
         try {
             YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
             RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
-            ImageData imageData = getPictureService().getOrderPictureByPath(body).execute().body();
+            ImageData imageData = getWaybillService().getOrderPictureByPath(body).execute().body();
             if (imageData == null) {
                 throw new RuntimeException("当前服务不可用");
             }
@@ -225,7 +272,8 @@ public class WaybillSDK {
         try {
             Payload payload = new Payload(saleOrder, carrierCode, packageCount, packageList);
 
-            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, SPLIT_ORDER_TOPIC, SOURCE, TARGET, "", JSONObject.toJSONString(payload));
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
+                    SPLIT_ORDER_TOPIC, SOURCE, TARGET, "", payload);
             RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
             Data data = getWaybillService().splitPackage(body).execute().body();
             if (data != null) {
@@ -243,166 +291,160 @@ public class WaybillSDK {
     /**
      * 通过唯一码请求打印面单. 支持批量打印, 并自动等待未生成的面单. 打印结果以异步回调方式进行通知
      *
-     * @param uuidCodeList   唯一码列表
-     * @param printer        指定打印机（为null时，默认使用当前打印机）
-     * @param needAllSuccess 是否需要等待图片全部生成完再打印
+     * @param uuidCodeList    唯一码列表
+     * @param printer         指定打印机（为null时，默认使用当前打印机）
+     * @param needAllSuccess  是否需要等待图片全部生成完再打印
+     * @param getImageTimeout 获取面单图片超时等待(毫秒计)
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void printLabelByUuidCode(List<String> uuidCodeList, String printer, Boolean needAllSuccess) {
+    public void printLabelByUuidCode(List<String> uuidCodeList, String printer, Boolean needAllSuccess, Integer getImageTimeout) {
+        getImageTimeout = getImageTimeout == null ? 0 : getImageTimeout;
+        final int timeout = getImageTimeout;
         PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
         if (Objects.isNull(currPrinter)) {
             return;
         }
-        executorService.execute(() -> syncPrintLabelByUuidCode(uuidCodeList, currPrinter, needAllSuccess == null ? Boolean.FALSE : needAllSuccess));
+        executorService.execute(() -> syncPrintLabelByUuidCode(uuidCodeList, currPrinter,
+                needAllSuccess == null ? Boolean.FALSE : needAllSuccess, timeout));
     }
 
-    private void syncPrintLabelByUuidCode(List<String> uuidCodeList, PrintService currPrinter, boolean needAllSuccess) {
+    private void syncPrintLabelByUuidCode(List<String> uuidCodeList, PrintService currPrinter,
+                                          boolean needAllSuccess, int getImageTimeout) {
+        long initialTime = System.currentTimeMillis();
         Map<String, String> map = new LinkedHashMap<>();
         if (needAllSuccess) {
             for (String uuidCode : uuidCodeList) {
-                AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-                while (!serverAvailable.get()) {
-                    try {
-                        YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
-                        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
-                        Response<ImageData> response = getPictureService().getOrderPictureByPath(body).execute();
-                        if (response.body().code != 200) {
-                            uuidCodeList.forEach(item -> {
-                                if (uuidCode.equals(item)) {
-                                    listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode), Constants.LABEL_NOT_READY, "label_not_ready");
-                                } else {
-                                    listener.onPrint(item, Boolean.FALSE, getLabelInfoByUuidCode(item), Constants.USER_CANCEL, "user_cancel");
-                                }
-                            });
-                            return;
+                YXMessage message = new YXMessage(UUID.randomUUID().toString(),
+                        0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+                RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                Response<ImageData> response;
+                try {
+                    response = getWaybillService().getOrderPictureByPath(body).execute();
+                } catch (IOException ex) {
+                    throw new RuntimeException("server error");
+                }
+                if (response.body().code != 200) {
+                    uuidCodeList.forEach(item -> {
+                        long lastTime = System.currentTimeMillis();
+                        if (uuidCode.equals(item)) {
+                            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode),
+                                    Constants.LABEL_NOT_READY, "label_not_ready");
                         } else {
-                            map.put(uuidCode, response.body().data);
-                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                            listener.onPrint(item, Boolean.FALSE, getLabelInfoByUuidCode(item),
+                                    Constants.USER_CANCEL, "user_cancel");
                         }
-                    } catch (IOException ex) {
-                        try {
-                            Thread.sleep(5000);
-                        } catch (InterruptedException ignore) {
-                        }
-                    }
+                        savePrintResultLog(uuidCode, lastTime - initialTime, "PRINT_FAIL");
+                    });
+                    return;
+                } else {
+                    map.put(uuidCode, response.body().data);
                 }
             }
             Set<String> uuidCodes = map.keySet();
             for (String uuidCode : uuidCodes) {
+                long startTime = System.currentTimeMillis();
                 InputStream imageStream = downloadImageStream(map.get(uuidCode));
                 InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
                 PrintResult printResult = printWaybill(currPrinter, inputStream);
+                long endTime = System.currentTimeMillis();
                 listener.onPrint(uuidCode, printResult.isSuccess, getLabelInfoByUuidCode(uuidCode), printResult.code, printResult.result);
+                savePrintResultLog(uuidCode, endTime - startTime, "PRINT_SUCCESS");
             }
         } else {
             for (String uuidCode : uuidCodeList) {
-                AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-                while (!serverAvailable.get()) {
+                AtomicInteger printCount = new AtomicInteger(0);
+                while (printCount.get() != 1) {
+                    long startTime = System.currentTimeMillis();
                     YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+                    RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                    Response<ImageData> response;
                     try {
-                        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
-                        Response<ImageData> response = getPictureService().getOrderPictureByPath(body).execute();
-                        if (response.body().code == 200) {
-                            InputStream imageStream = downloadImageStream(response.body().data);
-                            InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
-                            PrintResult printResult = printWaybill(currPrinter, inputStream);
-                            listener.onPrint(uuidCode, printResult.isSuccess, null, printResult.code, printResult.result);
-                        } else {
-                            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode), Constants.LABEL_NOT_READY, "label not ready");
-                        }
-                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
+                        response = getWaybillService().getOrderPictureByPath(body).execute();
                     } catch (IOException ex) {
-                        try {
-                            Thread.sleep(5000);
-                        } catch (InterruptedException ignore) {
+                        throw new RuntimeException("server error");
+                    }
+                    if (response.body().code == 200) {
+                        InputStream imageStream = downloadImageStream(response.body().data);
+                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
+                        PrintResult printResult = printWaybill(currPrinter, inputStream);
+                        long endTime = System.currentTimeMillis();
+                        listener.onPrint(uuidCode, printResult.isSuccess, null, printResult.code, printResult.result);
+                        savePrintResultLog(uuidCode, endTime - startTime, "PRINT_SUCCESS");
+                        printCount.compareAndSet(0, 1);
+                    } else {
+                        if (printCount.get() == 2) {
+                            long endTime = System.currentTimeMillis();
+                            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode), Constants.LABEL_NOT_READY, "label not ready");
+                            savePrintResultLog(uuidCode, endTime - startTime, "PRINT_FAIL");
+                            break;
                         }
+                        try {
+                            Thread.sleep(getImageTimeout);
+                        } catch (InterruptedException ex) {
+                            ex.printStackTrace();
+                        }
+                        printCount.compareAndSet(0, 2);
                     }
                 }
             }
         }
+    }
 
-//        for (String uuidCode : uuidCodeList) {
-//            AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-//            while (!serverAvailable.get()) {
-//                LabelInfo info = null;
-//                Response<LabelData> findResponse;
-//                try {
-//                    YXMessage message = new YXMessage(0, LABEL_UUID_TOPIC, SOURCE, TARGET, "sign", uuidCode);
-//                    findResponse = getWaybillService().findPictureByPath(JSONObject.toJSONString(message)).execute();
-//                    if (findResponse.isSuccessful()) {
-//                        info = findResponse.body().data;
-//                    }
-//                    YXMessage message1 = new YXMessage(0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "sign", uuidCode);
-//                    Response<ImageData> response = getPictureService().getOrderPictureByPath(JSONObject.toJSONString(message1)).execute();
-//                    if (response.body().code == 200) {
-//                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(new FileInputStream(response.body().data), currPrinter);
-//                        PrintResult printResult = printWaybill(currPrinter, inputStream);
-//                        listener.onPrint(uuidCode, printResult.isSuccess, info, printResult.code, printResult.result);
-//                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-//                    } else if (response.body().code == 404) {
-//                        listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.LABEL_NOT_EXIST, "label not exist");
-//                        serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-//                    } else if (response.body().code == 102) {
-//                        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
-//                        final CountDownLatch countDownLatch = new CountDownLatch(1);
-//                        final Map<String, Future> futures = new HashMap<>();
-//                        final AtomicBoolean flag = new AtomicBoolean(Boolean.FALSE);
-//                        Future future = executor.scheduleWithFixedDelay(() -> {
-//                            if (flag.get() && futures.get("uuid_code") != null) {
-//                                futures.get("uuid_code").cancel(true);
-//                                countDownLatch.countDown();
-//                            }
-//                            try {
-//                                Response<ImageData> newResponse = getPictureService().getOrderPictureByPath(uuidCode).execute();
-//                                if (newResponse.body().code == 200) {
-//                                    LabelInfo labelInfo = getWaybillService().findPictureByPath(uuidCode).execute().body().data;
-//                                    InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(new FileInputStream(newResponse.body().data), currPrinter);
-//                                    PrintResult printResult = printWaybill(currPrinter, inputStream);
-//                                    listener.onPrint(uuidCode, printResult.isSuccess, labelInfo, printResult.code, printResult.result);
-//                                    flag.set(Boolean.TRUE);
-//                                }
-//                            } catch (IOException ignore) {
-//                            }
-//                        }, 0, 2, TimeUnit.SECONDS);
-//                        futures.put("uuid_code", future);
-//                        try {
-//                            countDownLatch.await();
-//                            serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-//                        } catch (InterruptedException ex) {
-//                            listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.UNKNOWN, "unknown error");
-//                        }
-//                        executor.shutdown();
-//                    } else {
-//                        listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
-//                    }
-//                } catch (IOException ex) {
-//                    try {
-//                        Thread.sleep(5000);
-//                    } catch (InterruptedException ignore) {
-//                    }
-//                    listener.onPrint(uuidCode, Boolean.FALSE, info, Constants.NETWORK_ERROR, "server unreachable");
-//                }
-//            }
-//        }
+    private void savePrintResultLog(String uuidCode, long printTime, String result) {
+        PrintLog printLog = new PrintLog(Constants.DATE_FORMAT.format(new Date()), result,
+                TimeUnit.MILLISECONDS.toSeconds(printTime), uuidCode);
+        YXMessage logMessage = new YXMessage(UUID.randomUUID().toString(), 0,
+                LABEL_PRINT_LOG, SOURCE, TARGET, "", JSONObject.toJSONString(printLog));
+        RequestBody logBody = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                JSONObject.toJSONString(logMessage));
+        try {
+            Response<ResponseBody> logResponse = getWaybillService().savePrintResultLog(logBody).execute();
+            if (!logResponse.isSuccessful()) {
+                throw new RuntimeException("server error");
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException("server error");
+        }
     }
 
     /**
      * 通过批次号分包并请求打印面单，打印结果以异步回调方式进行通知
      *
-     * @param saleOrder      批次号
-     * @param carrierCode    承运商编码
-     * @param packageCount   包裹数
-     * @param packageList    货物信息
-     * @param printer        指定打印机（为null时，默认使用当前打印机）
-     * @param needAllSuccess 是否需要等待图片全部生成完再打印
+     * @param saleOrder       批次号
+     * @param carrierCode     承运商编码
+     * @param packageCount    包裹数
+     * @param packageList     货物信息
+     * @param printer         指定打印机（为null时，默认使用当前打印机）
+     * @param needAllSuccess  是否需要等待图片全部生成完再打印
+     * @param getImageTimeout 获取面单图片超时等待(毫秒计)
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void splitPackageAndPrint(String saleOrder, String carrierCode, Number packageCount, List<Package> packageList, String printer, Boolean needAllSuccess) {
+    public void splitPackageAndPrint(String saleOrder, String carrierCode, Number packageCount,
+                                     List<Package> packageList, String printer, Boolean needAllSuccess, Integer getImageTimeout) {
+        getImageTimeout = getImageTimeout == null ? 30000 : getImageTimeout;
+        final int timeout = getImageTimeout;
         executorService.execute(() -> {
-            List<LabelInfo> labelInfoList = splitPackage(saleOrder, carrierCode, packageCount, packageList);
+            List<LabelInfo> labelInfoList = new ArrayList<>();
+            AtomicInteger splitCount = new AtomicInteger(0);
+            while (splitCount.get() != 1) {
+                labelInfoList = splitPackage(saleOrder, carrierCode, packageCount, packageList);
+                if (labelInfoList.size() > 0) {
+                    splitCount.compareAndSet(0, 1);
+                } else {
+                    if (splitCount.get() == 2) {
+                        throw new RuntimeException("LabelNotExist");
+                    }
+                    try {
+                        Thread.sleep(timeout);
+                    } catch (InterruptedException ex) {
+                        ex.printStackTrace();
+                    }
+                    splitCount.compareAndSet(0, 2);
+                }
+            }
             List<String> uuidCodeList = new ArrayList<>();
             labelInfoList.forEach(labelInfo -> uuidCodeList.add(labelInfo.uuidCode));
-            printLabelByUuidCode(uuidCodeList, printer, needAllSuccess);
+            printLabelByUuidCode(uuidCodeList, printer, needAllSuccess, 0);
         });
     }
 
@@ -489,7 +531,7 @@ public class WaybillSDK {
     private WaybillService buildWaybillService(String serverAddress) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
-                .connectTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
                 .build();
@@ -502,22 +544,18 @@ public class WaybillSDK {
                 .create(WaybillService.class);
     }
 
-    @Getter(lazy = true)
-    private final PictureService pictureService = buildPictureService(serverAddress);
-
-    private PictureService buildPictureService(String serverAddress) {
+    private ServerService buildBestHealthServer(String url) {
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
-                .addInterceptor(new SignatureInterceptor(accessKey, accessSecret))
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .addNetworkInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BASIC))
                 .build();
 
         return new Retrofit.Builder()
-                .baseUrl(serverAddress)
+                .baseUrl(url)
                 .addConverterFactory(GsonConverterFactory.create())
                 .client(okHttpClient)
                 .build()
-                .create(PictureService.class);
+                .create(ServerService.class);
     }
 }

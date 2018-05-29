@@ -2,9 +2,11 @@ package com.tmindtech.api.waybill.sdk;
 
 import com.tmindtech.api.waybill.sdk.model.Data;
 import com.tmindtech.api.waybill.sdk.model.ExampleModel;
+import com.tmindtech.api.waybill.sdk.model.ImageData;
 import com.tmindtech.api.waybill.sdk.model.LabelData;
 import com.tmindtech.api.waybill.sdk.model.StatusModel;
 import okhttp3.RequestBody;
+import okhttp3.ResponseBody;
 import retrofit2.Call;
 import retrofit2.http.Body;
 import retrofit2.http.GET;
@@ -62,4 +64,12 @@ public interface WaybillService {
     @Headers({"Content-Type: application/json", "Accept: application/json"})
     @POST("request")
     Call<LabelData> findPictureByPath(@Body RequestBody body);
+
+    @Headers({"Content-Type: application/json", "Accept: application/json"})
+    @POST("request")
+    Call<ImageData> getOrderPictureByPath(@Body RequestBody body);
+
+    @Headers({"Content-Type: application/json", "Accept: application/json"})
+    @POST("request")
+    Call<ResponseBody> savePrintResultLog(@Body RequestBody body);
 }

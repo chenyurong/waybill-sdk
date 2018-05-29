@@ -12,9 +12,9 @@ public class YXMessage {
     public String target;
     public String timestamp;
     public String sign;
-    public String payload;
+    public Object payload;
 
-    public YXMessage(String id, Integer async, String topic, String source, String target, String sign, String payload) {
+    public YXMessage(String id, Integer async, String topic, String source, String target, String sign, Object payload) {
         this.id = id;
         this.async = async;
         this.topic = topic;

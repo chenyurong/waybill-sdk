@@ -1,6 +1,10 @@
 package com.tmindtech.api.waybill.sdk;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson.TypeReference;
 import com.tmindtech.api.waybill.sdk.model.LabelInfo;
+import com.tmindtech.api.waybill.sdk.model.Package;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,10 +27,20 @@ public class WaybillSDKApplication implements PrintListener {
         String accessSecret = scanner.next();
         System.out.println("请输入serverAddress:");
         String serverAddress = scanner.next();
-        if ("default".equals(serverAddress)) {
-            serverAddress = "http://106.15.40.222:9043/";
+        if ("cloudServer".equals(serverAddress)) {
+            serverAddress = "http://logistics-gateway.test.you.163.com/labelservice/";
         }
-        boolean initResult = sdk.init(accessKey, accessSecret, serverAddress);
+        System.out.println("请输入localAddress:");
+        String localAddress = scanner.next();
+        if ("localServer".equals(localAddress)) {
+            localAddress = "http://47.100.64.170/";
+        }
+        if ("null".equals(localAddress)) {
+            localAddress = null;
+        }
+        List<String> localAddresses = new ArrayList<>(1);
+        localAddresses.add(localAddress);
+        boolean initResult = sdk.init(accessKey, accessSecret, serverAddress, localAddresses);
         System.out.println("SDK初始化结果：" + initResult);
 
         //获取并输出所有的打印机名称
@@ -38,12 +52,35 @@ public class WaybillSDKApplication implements PrintListener {
 
         //设置指定打印机
         System.out.println("设置当前打印机，请输入以上打印机名称所对应的序号：");
-        int index = scanner.nextInt();
+        int index;
+        try {
+            index = scanner.nextInt();
+        } catch (Exception ex) {
+            System.out.println("输入的格式错误，请输入数字！");
+            return;
+        }
+        if (index > printers.size()) {
+            System.out.println("输入数字过大，请输入以上提示的数字！");
+            return;
+        }
         boolean setPrinterResult = sdk.setCurrentPrinter(printers.get(index - 1));
         System.out.println("设置指定打印机结果：" + setPrinterResult);
 
         //设置添加打印监听器
         sdk.setPrintListener(new WaybillSDKApplication());
+
+        //设置包裹信息
+        String str = "{\"packageList\":[{ \"seqNo\":1,\"weight\":20.2,\"volumeLong\":30.1,\"volumeWidth\":20.1,"
+                + "\"volumeHeight\": 10.2,\"volume\":15,\"cargoList\":[{\"skuId\":\"1122aaabb\",\"count\": 3},"
+                + "{\"skuId\": \"1122a2aabb\",\"count\":3}]},{\"seqNo\":2,\"weight\":20.2,\"volumeLong\":30.1,"
+                + "\"volumeWidth\": 20.1,\"volumeHeight\":10.2,\"volume\":15,\"cargoList\":[{\"skuId\":\"1122aaabb\","
+                + "\"count\":3},{\"skuId\": \"1122a2aabb\",\"count\":3}]},{\"seqNo\": 3,\"weight\": 20.2,\n"
+                + "\"volumeLong\":30.1,\"volumeWidth\":20.1,\"volumeHeight\":10.2,\"volume\":15,"
+                + "\"cargoList\":[{\"skuId\":\"1122aaabb\",\"count\":3},{\"skuId\":\"1122a2aabb\",\"count\": 3}]}]}";
+        JSONObject object = JSONObject.parseObject(str);
+        String packages = object.getString("packageList");
+        ArrayList<Package> list = JSON.parseObject(packages, new TypeReference<ArrayList<Package>>() {
+        });
 
         while (true) {
             System.out.println("-----------------------------------------------------------------------");
@@ -54,7 +91,13 @@ public class WaybillSDKApplication implements PrintListener {
             System.out.println(" 5 : 批次号saleOrder分包请求打印");
             System.out.println(" 0 : 退出");
             System.out.println("-----------------------------------------------------------------------");
-            int selectInpt = scanner.nextInt();
+            int selectInpt;
+            try {
+                selectInpt = scanner.nextInt();
+            } catch (Exception ex) {
+                System.out.println("输入的格式错误，请输入数字！");
+                break;
+            }
             if (0 == selectInpt) {
                 break;
             } else if (1 == selectInpt) {
@@ -67,7 +110,7 @@ public class WaybillSDKApplication implements PrintListener {
                 //重新下单获取面单信息，然后通过逻辑连接/唯一码获取面单图片
                 System.out.println("请输入分包的批次号：");
                 String saleOrder = scanner.next();
-                List<LabelInfo> labelInfos = sdk.splitPackage(saleOrder, null, 1, null);
+                List<LabelInfo> labelInfos = sdk.splitPackage(saleOrder, "jd", 3, list);
                 System.out.println("重新下单获取所有面单信息和可读状态：");
                 labelInfos.forEach(labelInfo -> System.out.println(labelInfo.toString()));
             } else if (3 == selectInpt) {
@@ -90,16 +133,21 @@ public class WaybillSDKApplication implements PrintListener {
                 Boolean needAllSuccess = scanner.nextBoolean();
                 List<String> logicUriList = new ArrayList<>();
                 logicUriList.add(uuidCode);
-                sdk.printLabelByUuidCode(logicUriList, printers.get(printer - 1), needAllSuccess);
+                sdk.printLabelByUuidCode(logicUriList, printers.get(printer - 1), needAllSuccess, 0);
             } else if (5 == selectInpt) {
                 //通过批次号请求打印面单. 支持批量打印. 打印结果以异步回调方式进行通知
                 System.out.println("请输入要打印的批次号：");
                 String saleOrder = scanner.next();
-                System.out.println("请输入指定的打印机：");
-                String printer = scanner.next();
+                System.out.println("所有打印机名称：");
+                for (int i = 1; i <= printers.size(); i++) {
+                    System.out.println(i + " : " + printers.get(i - 1));
+                }
+                System.out.println("请输入指定打印机序号：");
+                int printer = scanner.nextInt();
                 System.out.println("请输入needAllSuccess：");
                 Boolean needAllSuccess = scanner.nextBoolean();
-                sdk.splitPackageAndPrint(saleOrder, null, 1, null, printer, needAllSuccess);
+                sdk.splitPackageAndPrint(saleOrder, "jd", 3, list,
+                        printers.get(printer - 1), needAllSuccess, 30000);
             } else {
                 System.out.println("输入有误，请按上述提示输入！");
             }
