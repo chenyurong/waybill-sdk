@@ -9,9 +9,10 @@ import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.Payload;
 import com.tmindtech.api.waybill.sdk.model.PrintLog;
-import com.tmindtech.api.waybill.sdk.model.PrintResult;
 import com.tmindtech.api.waybill.sdk.model.YXMessage;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
+import com.tmindtech.api.waybill.sdk.util.InputStreamCacher;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -32,8 +33,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.imageio.ImageIO;
+import javax.imageio.stream.ImageOutputStream;
 import javax.print.Doc;
 import javax.print.DocFlavor;
 import javax.print.DocPrintJob;
@@ -311,7 +313,7 @@ public class WaybillSDK {
     private void syncPrintLabelByUuidCode(List<String> uuidCodeList, PrintService currPrinter,
                                           boolean needAllSuccess, int getImageTimeout) {
         long initialTime = System.currentTimeMillis();
-        Map<String, String> map = new LinkedHashMap<>();
+        Map<String, LabelInfo> map = new LinkedHashMap<>();
         if (needAllSuccess) {
             for (String uuidCode : uuidCodeList) {
                 YXMessage message = new YXMessage(UUID.randomUUID().toString(),
@@ -337,17 +339,35 @@ public class WaybillSDK {
                     });
                     return;
                 } else {
-                    map.put(uuidCode, response.body().data);
+                    LabelInfo labelInfo = getLabelInfoByUuidCode(uuidCode);
+                    labelInfo.data = response.body().data;
+                    map.put(uuidCode, labelInfo);
                 }
             }
             Set<String> uuidCodes = map.keySet();
             for (String uuidCode : uuidCodes) {
+                LabelInfo labelInfo = map.get(uuidCode);
                 long startTime = System.currentTimeMillis();
-                InputStream imageStream = downloadImageStream(map.get(uuidCode));
+                InputStream imageStream = downloadImageStream(labelInfo.data);
                 InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
-                PrintResult printResult = printWaybill(currPrinter, inputStream);
+
+                //pageCount大于1，说明该面单需要分多张图片打印
+                if (labelInfo.pageCount > 1) {
+                    InputStreamCacher cacher = new InputStreamCacher(inputStream);
+                    for (int i = 0; i < labelInfo.pageCount; i++) {
+                        boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount);
+                        if (!result) {
+                            throw new RuntimeException("print error");
+                        }
+                    }
+                }
+                if (labelInfo.pageCount == 1) {
+                    boolean result = printWaybill(currPrinter, inputStream, uuidCode, 0, 1);
+                    if (!result) {
+                        throw new RuntimeException("print error");
+                    }
+                }
                 long endTime = System.currentTimeMillis();
-                listener.onPrint(uuidCode, printResult.isSuccess, getLabelInfoByUuidCode(uuidCode), printResult.code, printResult.result);
                 savePrintResultLog(uuidCode, endTime - startTime, "PRINT_SUCCESS");
             }
         } else {
@@ -364,12 +384,28 @@ public class WaybillSDK {
                         throw new RuntimeException("server error");
                     }
                     if (response.body().code == 200) {
+                        LabelInfo labelInfo = getLabelInfoByUuidCode(uuidCode);
                         InputStream imageStream = downloadImageStream(response.body().data);
                         InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
-                        PrintResult printResult = printWaybill(currPrinter, inputStream);
+
+                        //pageCount大于1，说明该面单需要分多张图片打印
+                        boolean flag = true;
+                        if (labelInfo.pageCount > 1) {
+                            InputStreamCacher cacher = new InputStreamCacher(inputStream);
+                            for (int i = 0; i < labelInfo.pageCount; i++) {
+                                boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount);
+                                if (!result) {
+                                    flag = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (labelInfo.pageCount == 1) {
+                            flag = printWaybill(currPrinter, inputStream, uuidCode, 0, 1);
+                        }
+                        String logResult = flag ? "PRINT_SUCCESS" : "PRINT_FAIL";
                         long endTime = System.currentTimeMillis();
-                        listener.onPrint(uuidCode, printResult.isSuccess, null, printResult.code, printResult.result);
-                        savePrintResultLog(uuidCode, endTime - startTime, "PRINT_SUCCESS");
+                        savePrintResultLog(uuidCode, endTime - startTime, logResult);
                         printCount.compareAndSet(0, 1);
                     } else {
                         if (printCount.get() == 2) {
@@ -448,57 +484,63 @@ public class WaybillSDK {
         });
     }
 
-    private PrintResult printWaybill(PrintService printService, InputStream inputStream) {
-        PrintResult result = new PrintResult();
+    private boolean printWaybill(PrintService printService, InputStream inputStream, String uuidCode, int index, int size) {
+        InputStream printStream;
+        try {
+            BufferedImage image = ImageIO.read(inputStream);
+            BufferedImage subImage = image.getSubimage(0, (int) (index * 1.0 / size * image.getHeight()),
+                    image.getWidth(), image.getHeight() / size);
+            ByteArrayOutputStream bs = new ByteArrayOutputStream();
+            ImageOutputStream ios = ImageIO.createImageOutputStream(bs);
+            ImageIO.write(subImage, "png", ios);
+            printStream = new ByteArrayInputStream(bs.toByteArray());
+        } catch (IOException ex) {
+            throw new RuntimeException("inputStream convert fail");
+        }
+
         DocFlavor dof = DocFlavor.INPUT_STREAM.PNG;
         HashPrintRequestAttributeSet pras = new HashPrintRequestAttributeSet();
         pras.add(OrientationRequested.PORTRAIT);
         pras.add(PrintQuality.HIGH);
         pras.add(new Copies(1));
-        pras.add(MediaSizeName.ISO_A6);
+        pras.add(MediaSizeName.ISO_A4);
         try {
-            Doc doc = new SimpleDoc(inputStream, dof, null);
+            Doc doc = new SimpleDoc(printStream, dof, null);
             DocPrintJob job = printService.createPrintJob();
             job.addPrintJobListener(new PrintJobAdapter() {
                 @Override
                 public void printJobNoMoreEvents(PrintJobEvent pje) {
-                    result.isSuccess = Boolean.TRUE;
-                    result.code = Constants.SUCCESS;
-                    result.result = "print success, please wait for next print job";
                 }
             });
             job.print(doc, pras);
+            listener.onPrint(uuidCode, Boolean.TRUE, getLabelInfoByUuidCode(uuidCode),
+                    Constants.SUCCESS, "print success, please wait for next print job");
+            return true;
         } catch (PrintException ex) {
             ex.printStackTrace();
-            result.code = Constants.PRINTER_NOT_EXIST;
-            result.isSuccess = Boolean.FALSE;
-            result.result = "print failed, please check if the printer available";
+            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode),
+                    Constants.PRINTER_NOT_EXIST, "print failed, please check if the printer available");
+            return false;
         }
-        return result;
     }
 
     private LabelInfo getLabelInfoByUuidCode(String uuidCode) {
-        AtomicBoolean serverAvailable = new AtomicBoolean(Boolean.FALSE);
-        LabelInfo labelInfo = new LabelInfo();
-        while (!serverAvailable.get()) {
-            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_UUID_TOPIC, SOURCE, TARGET, "", uuidCode);
-            Response<LabelData> response;
-            try {
-                RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
-                response = getWaybillService().findPictureByPath(body).execute();
-                if (response.isSuccessful()) {
-                    labelInfo = response.body().data;
-                    serverAvailable.compareAndSet(Boolean.FALSE, Boolean.TRUE);
-                } else {
-                    throw new RuntimeException("labelNotExist");
-                }
-            } catch (IOException ex) {
-                try {
-                    Thread.sleep(5000);
-                } catch (InterruptedException ignore) {
-                }
-            }
+        LabelInfo labelInfo;
+        YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_UUID_TOPIC, SOURCE, TARGET, "", uuidCode);
+        Response<LabelData> response;
+        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+        try {
+            response = getWaybillService().findPictureByPath(body).execute();
+        } catch (IOException ex) {
+            ex.printStackTrace();
+            throw new RuntimeException("server error");
         }
+        if (response.isSuccessful()) {
+            labelInfo = response.body().data;
+        } else {
+            throw new RuntimeException("labelNotExist");
+        }
+
         return labelInfo;
     }
 
