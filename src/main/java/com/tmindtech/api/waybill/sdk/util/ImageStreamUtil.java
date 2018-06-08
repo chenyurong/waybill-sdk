@@ -1,5 +1,6 @@
 package com.tmindtech.api.waybill.sdk.util;
 
+import com.tmindtech.api.waybill.sdk.model.PrintStreamInfo;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
@@ -24,6 +25,8 @@ import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 import javax.print.PrintService;
+import javax.print.attribute.Size2DSyntax;
+import javax.print.attribute.standard.MediaSize;
 import javax.print.attribute.standard.PrinterResolution;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
@@ -39,9 +42,11 @@ public class ImageStreamUtil {
 
     /**
      * @param inputStream 需要转换的目标图片流
+     * @param pageCount   面单图片需要分图打印份数
      * @return 转换后的结果图片流 如果打印机未设置成功，会抛出NullPointerException异常
      */
-    public static InputStream convertImageStream2MatchPrinter(InputStream inputStream, PrintService printService) {
+    public static PrintStreamInfo convertImageStream2MatchPrinter(InputStream inputStream, PrintService printService, int pageCount) {
+        PrintStreamInfo streamInfo = new PrintStreamInfo();
         InputStreamCacher cacher = new InputStreamCacher(inputStream);
         PrinterResolution resolution;
         PrinterResolution[] resolutions = (PrinterResolution[]) printService.getSupportedAttributeValues(PrinterResolution.class, null, null);
@@ -83,9 +88,13 @@ public class ImageStreamUtil {
                 feedResolution = Math.round(INCH_2_MM / Float.parseFloat(item.getNodeValue()));
             }
 
+            streamInfo.mediaSizeName = MediaSize.findMedia((float) (width * 1.0 / crossResolution * 25.4),
+                    (float) (height * 1.0 / feedResolution / pageCount * 25.4), Size2DSyntax.MM);
+
             //如果图片的原始dpi和目标打印机的dpi相同，则不需要转换图片流
             if (crossResolution == resolution.getCrossFeedResolution(PrinterResolution.DPI)) {
-                return cacher.getInputStream();
+                streamInfo.inputStream = cacher.getInputStream();
+                return streamInfo;
             }
 
             int xdpi = resolution.getCrossFeedResolution(PrinterResolution.DPI);
@@ -98,13 +107,13 @@ public class ImageStreamUtil {
             BufferedOutputStream bufferStream = new BufferedOutputStream(bos);
             ImageIO.write(bufferedImage, "png", bufferStream);
             bufferStream.close();
-            return resetImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, xdpi, ydpi);
+            streamInfo.inputStream = resetImageDpi(new ByteArrayInputStream(bos.toByteArray()), convertWidth, convertHeight, xdpi, ydpi);
+            return streamInfo;
         } catch (IOException ex) {
             ex.printStackTrace();
         }
         return null;
     }
-
 
     /**
      * 重置图片的dpi

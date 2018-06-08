@@ -9,6 +9,7 @@ import com.tmindtech.api.waybill.sdk.model.LabelInfo;
 import com.tmindtech.api.waybill.sdk.model.Package;
 import com.tmindtech.api.waybill.sdk.model.Payload;
 import com.tmindtech.api.waybill.sdk.model.PrintLog;
+import com.tmindtech.api.waybill.sdk.model.PrintStreamInfo;
 import com.tmindtech.api.waybill.sdk.model.YXMessage;
 import com.tmindtech.api.waybill.sdk.util.ImageStreamUtil;
 import com.tmindtech.api.waybill.sdk.util.InputStreamCacher;
@@ -349,20 +350,23 @@ public class WaybillSDK {
                 LabelInfo labelInfo = map.get(uuidCode);
                 long startTime = System.currentTimeMillis();
                 InputStream imageStream = downloadImageStream(labelInfo.data);
-                InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
+                PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter, labelInfo.pageCount);
+                if (Objects.isNull(streamInfo) || Objects.isNull(streamInfo.mediaSizeName)) {
+                    throw new RuntimeException("imageStream convert failure");
+                }
 
                 //pageCount大于1，说明该面单需要分多张图片打印
                 if (labelInfo.pageCount > 1) {
-                    InputStreamCacher cacher = new InputStreamCacher(inputStream);
+                    InputStreamCacher cacher = new InputStreamCacher(streamInfo.inputStream);
                     for (int i = 0; i < labelInfo.pageCount; i++) {
-                        boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount);
+                        boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount, streamInfo.mediaSizeName);
                         if (!result) {
                             throw new RuntimeException("print error");
                         }
                     }
                 }
                 if (labelInfo.pageCount == 1) {
-                    boolean result = printWaybill(currPrinter, inputStream, uuidCode, 0, 1);
+                    boolean result = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0, 1, streamInfo.mediaSizeName);
                     if (!result) {
                         throw new RuntimeException("print error");
                     }
@@ -386,14 +390,17 @@ public class WaybillSDK {
                     if (response.body().code == 200) {
                         LabelInfo labelInfo = getLabelInfoByUuidCode(uuidCode);
                         InputStream imageStream = downloadImageStream(response.body().data);
-                        InputStream inputStream = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter);
+                        PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter, labelInfo.pageCount);
+                        if (Objects.isNull(streamInfo) || Objects.isNull(streamInfo.mediaSizeName)) {
+                            throw new RuntimeException("imageStream convert failure");
+                        }
 
                         //pageCount大于1，说明该面单需要分多张图片打印
                         boolean flag = true;
                         if (labelInfo.pageCount > 1) {
-                            InputStreamCacher cacher = new InputStreamCacher(inputStream);
+                            InputStreamCacher cacher = new InputStreamCacher(streamInfo.inputStream);
                             for (int i = 0; i < labelInfo.pageCount; i++) {
-                                boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount);
+                                boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount, streamInfo.mediaSizeName);
                                 if (!result) {
                                     flag = false;
                                     break;
@@ -401,7 +408,7 @@ public class WaybillSDK {
                             }
                         }
                         if (labelInfo.pageCount == 1) {
-                            flag = printWaybill(currPrinter, inputStream, uuidCode, 0, 1);
+                            flag = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0, 1, streamInfo.mediaSizeName);
                         }
                         String logResult = flag ? "PRINT_SUCCESS" : "PRINT_FAIL";
                         long endTime = System.currentTimeMillis();
@@ -484,7 +491,7 @@ public class WaybillSDK {
         });
     }
 
-    private boolean printWaybill(PrintService printService, InputStream inputStream, String uuidCode, int index, int size) {
+    private boolean printWaybill(PrintService printService, InputStream inputStream, String uuidCode, int index, int size, MediaSizeName mediaSizeName) {
         InputStream printStream;
         try {
             BufferedImage image = ImageIO.read(inputStream);
@@ -503,7 +510,7 @@ public class WaybillSDK {
         pras.add(OrientationRequested.PORTRAIT);
         pras.add(PrintQuality.HIGH);
         pras.add(new Copies(1));
-        pras.add(MediaSizeName.ISO_A4);
+        pras.add(mediaSizeName);
         try {
             Doc doc = new SimpleDoc(printStream, dof, null);
             DocPrintJob job = printService.createPrintJob();
