@@ -1,7 +1,6 @@
 package com.tmindtech.api.waybill.sdk.model;
 
 import java.io.InputStream;
-import javax.print.attribute.standard.MediaSizeName;
 
 /**
  * @Author: yfqi
@@ -9,5 +8,6 @@ import javax.print.attribute.standard.MediaSizeName;
  */
 public class PrintStreamInfo {
     public InputStream inputStream;
-    public MediaSizeName mediaSizeName;
+    public float width;
+    public float height;
 }

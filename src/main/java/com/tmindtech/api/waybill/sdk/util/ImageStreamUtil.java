@@ -25,8 +25,6 @@ import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 import javax.print.PrintService;
-import javax.print.attribute.Size2DSyntax;
-import javax.print.attribute.standard.MediaSize;
 import javax.print.attribute.standard.PrinterResolution;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
@@ -88,8 +86,8 @@ public class ImageStreamUtil {
                 feedResolution = Math.round(INCH_2_MM / Float.parseFloat(item.getNodeValue()));
             }
 
-            streamInfo.mediaSizeName = MediaSize.findMedia((float) (width * 1.0 / crossResolution * 25.4),
-                    (float) (height * 1.0 / feedResolution / pageCount * 25.4), Size2DSyntax.MM);
+            streamInfo.width = (float) (width * 1.0 / crossResolution * 25.4);
+            streamInfo.height = (float) (height * 1.0 / feedResolution / pageCount * 25.4);
 
             //如果图片的原始dpi和目标打印机的dpi相同，则不需要转换图片流
             if (crossResolution == resolution.getCrossFeedResolution(PrinterResolution.DPI)) {

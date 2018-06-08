@@ -47,7 +47,7 @@ import javax.print.SimpleDoc;
 import javax.print.attribute.HashAttributeSet;
 import javax.print.attribute.HashPrintRequestAttributeSet;
 import javax.print.attribute.standard.Copies;
-import javax.print.attribute.standard.MediaSizeName;
+import javax.print.attribute.standard.MediaPrintableArea;
 import javax.print.attribute.standard.OrientationRequested;
 import javax.print.attribute.standard.PrintQuality;
 import javax.print.attribute.standard.PrinterName;
@@ -218,8 +218,10 @@ public class WaybillSDK {
     public List<LabelInfo> getLabelInfo(String saleOrder) {
         List<LabelInfo> labelInfos = new ArrayList<>();
         try {
-            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ORDER_TOPIC, SOURCE, TARGET, "", saleOrder);
-            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
+                    LABEL_ORDER_TOPIC, SOURCE, TARGET, "", saleOrder);
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                    JSONObject.toJSONString(message));
             Data data = getWaybillService().getLabelInfo(body).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
@@ -241,8 +243,10 @@ public class WaybillSDK {
      */
     public InputStream getLabelImageByUuidCode(String uuidCode) {
         try {
-            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
-            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
+                    LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                    JSONObject.toJSONString(message));
             ImageData imageData = getWaybillService().getOrderPictureByPath(body).execute().body();
             if (imageData == null) {
                 throw new RuntimeException("当前服务不可用");
@@ -270,14 +274,16 @@ public class WaybillSDK {
      * @param packageList  货物信息
      * @return 面单信息列表，兼容多包裹
      */
-    public List<LabelInfo> splitPackage(String saleOrder, String carrierCode, Number packageCount, List<Package> packageList) {
+    public List<LabelInfo> splitPackage(String saleOrder, String carrierCode,
+                                        Number packageCount, List<Package> packageList) {
         List<LabelInfo> labelInfos = new ArrayList<>();
         try {
             Payload payload = new Payload(saleOrder, carrierCode, packageCount, packageList);
 
             YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
                     SPLIT_ORDER_TOPIC, SOURCE, TARGET, "", payload);
-            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+            RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                    JSONObject.toJSONString(message));
             Data data = getWaybillService().splitPackage(body).execute().body();
             if (data != null) {
                 if (data.data.isEmpty()) {
@@ -300,7 +306,8 @@ public class WaybillSDK {
      * @param getImageTimeout 获取面单图片超时等待(毫秒计)
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
-    public void printLabelByUuidCode(List<String> uuidCodeList, String printer, Boolean needAllSuccess, Integer getImageTimeout) {
+    public void printLabelByUuidCode(List<String> uuidCodeList, String printer,
+                                     Boolean needAllSuccess, Integer getImageTimeout) {
         getImageTimeout = getImageTimeout == null ? 0 : getImageTimeout;
         final int timeout = getImageTimeout;
         PrintService currPrinter = printer == null ? printService : getPrinterByName(printer);
@@ -319,7 +326,8 @@ public class WaybillSDK {
             for (String uuidCode : uuidCodeList) {
                 YXMessage message = new YXMessage(UUID.randomUUID().toString(),
                         0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
-                RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                        JSONObject.toJSONString(message));
                 Response<ImageData> response;
                 try {
                     response = getWaybillService().getOrderPictureByPath(body).execute();
@@ -350,8 +358,9 @@ public class WaybillSDK {
                 LabelInfo labelInfo = map.get(uuidCode);
                 long startTime = System.currentTimeMillis();
                 InputStream imageStream = downloadImageStream(labelInfo.data);
-                PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter, labelInfo.pageCount);
-                if (Objects.isNull(streamInfo) || Objects.isNull(streamInfo.mediaSizeName)) {
+                PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream,
+                        currPrinter, labelInfo.pageCount);
+                if (Objects.isNull(streamInfo)) {
                     throw new RuntimeException("imageStream convert failure");
                 }
 
@@ -359,14 +368,16 @@ public class WaybillSDK {
                 if (labelInfo.pageCount > 1) {
                     InputStreamCacher cacher = new InputStreamCacher(streamInfo.inputStream);
                     for (int i = 0; i < labelInfo.pageCount; i++) {
-                        boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount, streamInfo.mediaSizeName);
+                        boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i,
+                                labelInfo.pageCount, streamInfo.width, streamInfo.height);
                         if (!result) {
                             throw new RuntimeException("print error");
                         }
                     }
                 }
                 if (labelInfo.pageCount == 1) {
-                    boolean result = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0, 1, streamInfo.mediaSizeName);
+                    boolean result = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0,
+                            1, streamInfo.width, streamInfo.height);
                     if (!result) {
                         throw new RuntimeException("print error");
                     }
@@ -379,8 +390,10 @@ public class WaybillSDK {
                 AtomicInteger printCount = new AtomicInteger(0);
                 while (printCount.get() != 1) {
                     long startTime = System.currentTimeMillis();
-                    YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
-                    RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+                    YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
+                            LABEL_ADDRESS_TOPIC, SOURCE, TARGET, "", uuidCode);
+                    RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                            JSONObject.toJSONString(message));
                     Response<ImageData> response;
                     try {
                         response = getWaybillService().getOrderPictureByPath(body).execute();
@@ -390,8 +403,9 @@ public class WaybillSDK {
                     if (response.body().code == 200) {
                         LabelInfo labelInfo = getLabelInfoByUuidCode(uuidCode);
                         InputStream imageStream = downloadImageStream(response.body().data);
-                        PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream, currPrinter, labelInfo.pageCount);
-                        if (Objects.isNull(streamInfo) || Objects.isNull(streamInfo.mediaSizeName)) {
+                        PrintStreamInfo streamInfo = ImageStreamUtil.convertImageStream2MatchPrinter(imageStream,
+                                currPrinter, labelInfo.pageCount);
+                        if (Objects.isNull(streamInfo)) {
                             throw new RuntimeException("imageStream convert failure");
                         }
 
@@ -400,7 +414,8 @@ public class WaybillSDK {
                         if (labelInfo.pageCount > 1) {
                             InputStreamCacher cacher = new InputStreamCacher(streamInfo.inputStream);
                             for (int i = 0; i < labelInfo.pageCount; i++) {
-                                boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i, labelInfo.pageCount, streamInfo.mediaSizeName);
+                                boolean result = printWaybill(currPrinter, cacher.getInputStream(), uuidCode, i,
+                                        labelInfo.pageCount, streamInfo.width, streamInfo.height);
                                 if (!result) {
                                     flag = false;
                                     break;
@@ -408,7 +423,8 @@ public class WaybillSDK {
                             }
                         }
                         if (labelInfo.pageCount == 1) {
-                            flag = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0, 1, streamInfo.mediaSizeName);
+                            flag = printWaybill(currPrinter, streamInfo.inputStream, uuidCode, 0,
+                                    1, streamInfo.width, streamInfo.height);
                         }
                         String logResult = flag ? "PRINT_SUCCESS" : "PRINT_FAIL";
                         long endTime = System.currentTimeMillis();
@@ -417,7 +433,8 @@ public class WaybillSDK {
                     } else {
                         if (printCount.get() == 2) {
                             long endTime = System.currentTimeMillis();
-                            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode), Constants.LABEL_NOT_READY, "label not ready");
+                            listener.onPrint(uuidCode, Boolean.FALSE, getLabelInfoByUuidCode(uuidCode),
+                                    Constants.LABEL_NOT_READY, "label not ready");
                             savePrintResultLog(uuidCode, endTime - startTime, "PRINT_FAIL");
                             break;
                         }
@@ -463,7 +480,8 @@ public class WaybillSDK {
      * @return 如果打印宽度 (printerWidth) > 高度 (printerHeight) 会产生IllegalArgumentException异常
      */
     public void splitPackageAndPrint(String saleOrder, String carrierCode, Number packageCount,
-                                     List<Package> packageList, String printer, Boolean needAllSuccess, Integer getImageTimeout) {
+                                     List<Package> packageList, String printer,
+                                     Boolean needAllSuccess, Integer getImageTimeout) {
         getImageTimeout = getImageTimeout == null ? 30000 : getImageTimeout;
         final int timeout = getImageTimeout;
         executorService.execute(() -> {
@@ -491,7 +509,8 @@ public class WaybillSDK {
         });
     }
 
-    private boolean printWaybill(PrintService printService, InputStream inputStream, String uuidCode, int index, int size, MediaSizeName mediaSizeName) {
+    private boolean printWaybill(PrintService printService, InputStream inputStream,
+                                 String uuidCode, int index, int size, float width, float height) {
         InputStream printStream;
         try {
             BufferedImage image = ImageIO.read(inputStream);
@@ -510,7 +529,7 @@ public class WaybillSDK {
         pras.add(OrientationRequested.PORTRAIT);
         pras.add(PrintQuality.HIGH);
         pras.add(new Copies(1));
-        pras.add(mediaSizeName);
+        pras.add(new MediaPrintableArea(0, 0, width, height, MediaPrintableArea.MM));
         try {
             Doc doc = new SimpleDoc(printStream, dof, null);
             DocPrintJob job = printService.createPrintJob();
@@ -533,9 +552,11 @@ public class WaybillSDK {
 
     private LabelInfo getLabelInfoByUuidCode(String uuidCode) {
         LabelInfo labelInfo;
-        YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0, LABEL_UUID_TOPIC, SOURCE, TARGET, "", uuidCode);
+        YXMessage message = new YXMessage(UUID.randomUUID().toString(), 0,
+                LABEL_UUID_TOPIC, SOURCE, TARGET, "", uuidCode);
         Response<LabelData> response;
-        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), JSONObject.toJSONString(message));
+        RequestBody body = RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+                JSONObject.toJSONString(message));
         try {
             response = getWaybillService().findPictureByPath(body).execute();
         } catch (IOException ex) {
